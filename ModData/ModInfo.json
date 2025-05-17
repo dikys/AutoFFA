@@ -1,10 +1,9 @@
 {
-  "Uid": "#ContentPack_HordeModTemplate",
-  "DisplayName": "Horde mod template",
-  "Description": "Заготовка для мода к Орде",
-  "Authors": "HordeResurrection",
+  "Uid": "#ContentPack_AutoFFA",
+  "DisplayName": "Auto FFA",
+  "Description": "Мод автоматически управляет дипломатией на карте,\n чтобы игроки не скучали.",
+  "Authors": "Dikysa",
   "BuiltIn": false,
   "StandAlone": false,
-  "GameVersion": "0.76pre",
-  "ModVersion": "1.00"
+  "Params": null
 }
