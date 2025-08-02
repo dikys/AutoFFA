@@ -108,6 +108,20 @@ export class Team {
     }
 
     /**
+     * Удаляет вассала из команды.
+     * @param {FfaParticipant} vassal - Участник, которого нужно удалить.
+     * @returns {boolean} True, если вассал был найден и удален.
+     */
+    public removeVassal(vassal: FfaParticipant): boolean {
+        if (this._vassals.has(vassal.id)) {
+            this._vassals.delete(vassal.id);
+            vassal.suzerain = null; // Сбрасываем сюзерена
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Проверяет, следует ли повысить более могущественного вассала до сюзерена.
      */
     public promoteNewSuzerainIfNeeded(): void {

@@ -37,6 +37,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         DEFEATS: 88,
         BOUNTY_CHECK: 95,
         GAME_END_CHECK: 99,
+        COALITION_CHECK: 97,
     };
 
     // ==================================================================================================
@@ -55,6 +56,7 @@ export class AutoFfaPlugin extends HordePluginBase {
     private isGameFinished = false;
     private readonly settings: AutoFFASettings;
     private bountyParticipant: FfaParticipant | null = null;
+    private mapLinearSize: number = 1;
     private nextBountyCheckTick = 0;
     private initialPeaceEndTick = 0; // Тик, когда закончится начальный мир
 
@@ -104,6 +106,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             case this.TICK_OFFSET.DEFEATS: this.checkForDefeatedParticipants(); break;
             case this.TICK_OFFSET.BOUNTY_CHECK: this.checkForBounty(gameTickNum); break;
             case this.TICK_OFFSET.GAME_END_CHECK: this.checkForGameEnd(); break;
+            case this.TICK_OFFSET.COALITION_CHECK: this.manageCoalitions(); break;
         }
     }
 
@@ -113,6 +116,14 @@ export class AutoFfaPlugin extends HordePluginBase {
 
     private initialize(): void {
         this.log.info("Инициализация Auto FFA...");
+
+        var scenaWidth  = ActiveScena.GetRealScena().Size.Width;
+        var scenaHeight = ActiveScena.GetRealScena().Size.Height;
+        this.mapLinearSize = Math.sqrt(scenaWidth * scenaHeight);
+        if (this.mapLinearSize <= 1) {
+            this.log.warning(`Не удалось определить размер карты (${this.mapLinearSize}), множитель за расстояние может работать некорректно. Установлено значение по умолчанию 256.`);
+            this.mapLinearSize = 100; // Fallback
+        }
 
         this.setupParticipantsAndTeams();
         this.setInitialDiplomacy();
@@ -237,14 +248,17 @@ export class AutoFfaPlugin extends HordePluginBase {
         let powerPointPerHp = this.unitCfgUidToPowerPerHp.get(damageArgs.VictimUnit.Cfg.Uid);
         if (powerPointPerHp === undefined) {
             const cfg = damageArgs.VictimUnit.Cfg;
-            powerPointPerHp = 0.01 * (cfg.CostResources.Gold + cfg.CostResources.Metal + cfg.CostResources.Lumber + 50 * cfg.CostResources.People) / cfg.MaxHealth;
+            powerPointPerHp = this.settings.powerPointPerHpCoeff * (cfg.CostResources.Gold + cfg.CostResources.Metal + cfg.CostResources.Lumber + 50 * cfg.CostResources.People) / cfg.MaxHealth;
             this.unitCfgUidToPowerPerHp.set(cfg.Uid, powerPointPerHp);
         }
 
-        const distanceFactor = Math.log(Math.max(1, chebyshevDistance(
+        const distance = chebyshevDistance(
             attacker.castle.Cell.X, attacker.castle.Cell.Y,
             damageArgs.TriggeredUnit.Cell.X, damageArgs.TriggeredUnit.Cell.Y
-        )));
+        );
+
+        // Множитель за расстояние, линейно от 1 (вблизи замка) до 3 (на краю карты).
+        const distanceFactor = Math.min(1 + 2 * (distance / this.mapLinearSize), 3);
         
         let deltaPoints = damageArgs.Damage * powerPointPerHp * distanceFactor;
 
@@ -314,37 +328,73 @@ export class AutoFfaPlugin extends HordePluginBase {
 
         for (const defeated of defeatedParticipants) {
             const loserTeam = this.teams.get(defeated.teamId);
-            if (!loserTeam) continue;
+            if (!loserTeam) {
+                this.log.error(`Не найдена команда для побежденного участника ${defeated.name} (teamId: ${defeated.teamId})`);
+                continue;
+            }
 
             const winner = this.findWinnerFor(defeated);
-
             if (!winner) {
-                this.log.warning(`Не удалось определить победителя для побежденного участника ${defeated.name}.`);
+                this.log.warning(`Не удалось определить победителя для побежденного участника ${defeated.name}. Восстанавливаем замок.`);
                 defeated.respawnCastle();
                 defeated.isDefeated = false;
                 continue;
             }
 
             const winnerTeam = this.teams.get(winner.teamId);
-            if (!winnerTeam) continue;
-
-            this.log.info(`Участник ${defeated.name} (${defeated.id}) был побежден ${winner.name} и перейдет из команды ${loserTeam.id} в команду ${winnerTeam.id}.`);
-
-            const allLosers = loserTeam.getMembers();
-            for (const member of allLosers) {
-                const takenPercentage = member.isSuzerain() ? this.settings.powerPointsRewardPercentage : this.settings.powerPointsRewardPercentage / 2;
-                winnerTeam.shareSpoils(member, takenPercentage);
+            if (!winnerTeam) {
+                this.log.error(`Не найдена команда для победителя ${winner.name} (teamId: ${winner.teamId})`);
+                continue;
             }
 
-            winnerTeam.addSuzerainAndVassals(defeated, loserTeam.vassals);
-            this.teams.delete(loserTeam.id);
+            // Логика зависит от того, кто был побежден: сюзерен или вассал
+            if (defeated.isSuzerain()) {
+                // =================================================
+                // === Сценарий: Побежден Сюзерен (вся команда) ===
+                // =================================================
+                this.log.info(`Сюзерен ${defeated.name} (команда ${loserTeam.id}) был побежден ${winner.name}. Вся команда переходит к победителю.`);
 
+                const allLosers = loserTeam.getMembers();
+                for (const member of allLosers) {
+                    // Распределяем трофеи за каждого члена проигравшей команды
+                    const takenPercentage = member.isSuzerain() ? 0.20 : 0.10; // 20% за сюзерена, 10% за вассала
+                    winnerTeam.shareSpoils(member, takenPercentage);
+                }
+
+                // Перемещаем всех членов проигравшей команды в команду победителя
+                winnerTeam.addSuzerainAndVassals(loserTeam.suzerain, loserTeam.vassals);
+                
+                // Удаляем старую, теперь пустую, команду
+                this.teams.delete(loserTeam.id);
+
+                broadcastMessage(`${winner.name} разгромил королевство ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
+                
+                // Сбрасываем флаг поражения для всех, кто перешел
+                allLosers.forEach(member => member.isDefeated = false);
+            } else {
+                // =================================================
+                // === Сценарий: Побежден Вассал (один участник) ===
+                // =================================================
+                this.log.info(`Вассал ${defeated.name} (команда ${loserTeam.id}) был побежден ${winner.name} и переходит в команду ${winnerTeam.id}.`);
+
+                // Распределяем трофеи только за побежденного вассала
+                const takenPercentage = 0.10; // 10% за вассала
+                winnerTeam.shareSpoils(defeated, takenPercentage);
+
+                // Перемещаем вассала
+                loserTeam.removeVassal(defeated);
+                winnerTeam.addVassal(defeated);
+
+                broadcastMessage(`${winner.name} захватил вассала ${defeated.name} у ${loserTeam.suzerain.name}!`, winnerTeam.suzerain.settlement.SettlementColor);
+                
+                // Сбрасываем флаг поражения только для него
+                defeated.isDefeated = false;
+            }
+
+            // После любого захвата команда-победитель получает временный мир
             this.startTemporaryPeace(winnerTeam, gameTickNum);
-
-            broadcastMessage(`${winner.name} победил ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
-            broadcastMessage(`Команда ${winnerTeam.suzerain.name} получает временный мир на ${this.settings.temporaryPeaceDurationTicks / 50 / 60} мин для восстановления.`, winnerTeam.suzerain.settlement.SettlementColor);
-
-            allLosers.forEach(member => member.isDefeated = false);
+            const peaceDurationMinutes = Math.round(this.settings.temporaryPeaceDurationTicks / 50 / 60);
+            broadcastMessage(`Команда ${winnerTeam.suzerain.name} получает временный мир на ${peaceDurationMinutes} мин. для восстановления.`, winnerTeam.suzerain.settlement.SettlementColor);
         }
     }
 
@@ -374,21 +424,57 @@ export class AutoFfaPlugin extends HordePluginBase {
         const allTeams = Array.from(this.teams.values());
         for (const team of allTeams) {
             if (team.peaceUntilTick > 0 && gameTickNum > team.peaceUntilTick) {
-                this.log.info(`Мирный договор для команды ${team.id} истек. Объявляется война всем.`);
+                this.log.info(`Мирный договор для команды ${team.suzerain.name} истек.`);
                 team.peaceUntilTick = 0;
 
-                const dominantTeam = this.findDominantTeam();
-                if (this.settings.enableCoalitionsAgainstLeader && dominantTeam && dominantTeam.id !== team.id) {
-                    const coalition = allTeams.filter(t => t.id !== dominantTeam.id);
-                    team.setWarStatusWithAll([dominantTeam]);
-                    team.setPeaceStatusWithAll(coalition);
-                } else {
-                    team.setWarStatusWithAll(allTeams);
-                }
+                // Просто объявляем войну всем остальным командам.
+                // Логика коалиций обрабатывается в manageCoalitions.
+                team.setWarStatusWithAll(allTeams);
 
                 broadcastMessage(`Мирный договор для команды ${team.suzerain.name} закончился! Они снова в бою!`, team.suzerain.settlement.SettlementColor);
             }
         }
+    }
+
+    private manageCoalitions(): void {
+        if (!this.settings.enableCoalitionsAgainstLeader) {
+            return;
+        }
+
+        const dominantTeam = this.findDominantTeam();
+        if (!dominantTeam) {
+            return; // Нет доминирующей команды, коалиция не нужна.
+        }
+
+        const otherTeams = Array.from(this.teams.values()).filter(t => t.id !== dominantTeam.id);
+        if (otherTeams.length <= 1) {
+            return; // Не с кем объединяться или коалиция уже сформирована.
+        }
+
+        this.log.info(`Обнаружена доминирующая команда ${dominantTeam.suzerain.name}. Формируется коалиция.`);
+
+        // 1. Находим сильнейшего сюзерена среди остальных для лидерства в коалиции.
+        const coalitionLeaderTeam = otherTeams.reduce((prev, current) => 
+            (prev.suzerain.powerPoints > current.suzerain.powerPoints) ? prev : current
+        );
+
+        // 2. Объединяем все остальные команды в команду лидера коалиции.
+        const teamsToMerge = otherTeams.filter(t => t.id !== coalitionLeaderTeam.id);
+        for (const teamToMerge of teamsToMerge) {
+            coalitionLeaderTeam.addSuzerainAndVassals(teamToMerge.suzerain, teamToMerge.vassals);
+            this.teams.delete(teamToMerge.id);
+            this.log.info(`Команда ${teamToMerge.suzerain.name} (id: ${teamToMerge.id}) расформирована и присоединилась к коалиции.`);
+        }
+
+        // 3. Устанавливаем дипломатию для новой коалиции.
+        coalitionLeaderTeam.setWarStatusWithAll([dominantTeam]);
+
+        // 4. Сообщаем всем игрокам.
+        broadcastMessage(
+            `Команда ${dominantTeam.suzerain.name} стала слишком сильной! ` +
+            `Остальные игроки объединились в коалицию под предводительством ${coalitionLeaderTeam.suzerain.name}, чтобы дать отпор!`,
+            coalitionLeaderTeam.suzerain.settlement.SettlementColor
+        );
     }
 
     private findDominantTeam(): Team | null {

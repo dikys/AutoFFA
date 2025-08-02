@@ -10,11 +10,14 @@ export class AutoFFASettings {
     /** Начальное количество очков влияния у каждого игрока. */
     public initialPowerPoints: number = 1500;
 
-    /** Длительность мирного договора в тиках (3 минуты = 3 * 60 * 50 = 9000). */
-    public temporaryPeaceDurationTicks: number = 9000;
+    /** Длительность мирного договора в тиках (1 минуты = 1 * 60 * 50 = 3000). */
+    public temporaryPeaceDurationTicks: number = 3000;
 
     /** Включить ли механику коалиций против доминирующей команды. */
     public enableCoalitionsAgainstLeader: boolean = true;
+
+    /** Коэффициент набора очков силы */
+    public powerPointPerHpCoeff: number = 0.03; 
 
     // ===============================================================
     // ===                   НАЧАЛО ИГРЫ                           ===
