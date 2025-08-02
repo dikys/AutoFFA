@@ -1,1317 +1,538 @@
-import { log, LogLevel } from "library/common/logging";
-import { broadcastMessage, createGameMessageWithNoSound, createGameMessageWithSound } from "library/common/messages";
-import { generateCellInSpiral } from "library/common/position-tools";
-import { createHordeColor, createPoint, createResourcesAmount, Point2D } from "library/common/primitives";
-import { DiplomacyStatus, UnitDirection, DrawLayer, FontUtils, GeometryVisualEffect, GeometryCanvas, Stride_Vector2, Stride_Color, UnitCommand, Settlement, UnitConfig, Unit, StringVisualEffect } from "library/game-logic/horde-types";
-import { unitCanBePlacedByRealMap } from "library/game-logic/unit-and-map";
+import { AutoFFASettings } from "./AutoFFASettings";
 import HordePluginBase from "plugins/base-plugin";
+import { log, LogLevel } from "library/common/logging";
+import { broadcastMessage } from "library/common/messages";
+import { createHordeColor, createPoint } from "library/common/primitives";
+import { DiplomacyStatus, DrawLayer, FontUtils, GeometryCanvas, GeometryVisualEffect, Stride_Color, Stride_Vector2, StringVisualEffect } from "library/game-logic/horde-types";
 import { isReplayMode } from "library/game-logic/game-tools";
 import { spawnGeometry, spawnString } from "library/game-logic/decoration-spawn";
+import { FfaParticipant } from "./FfaParticipant";
+import { DiplomacyManager } from "./DiplomacyManager";
+import { Team } from "./Team";
 
-const SpawnUnitParameters = HordeClassLibrary.World.Objects.Units.SpawnUnitParameters;
-
-// 20241129
-// начальное число очков власти 0 -> 1500
-// в 2 раза уменьшил набор очков за урон
-// теперь урон не наносится только нейтралам (ранее союзникам тоже)
-// добавлено сообщение сколько начислено очков власти за победу
-// изменено сообщение об объявлении войны между сюзеренами
-// добавлена подпись сюзерен и вассал
-
-// 20241121
-// теперь дерева 5% -> 10% от очков власти начисляют
-// начальное число очков власти = 0
-// в 4 раза увеличил набор очков за урон
-
-// 20241118
-// теперь дерева 5% от очков власти начисляют
-// изменил цвет текста очков власти, теперь ближе к цвету игрока
-// теперь мирным целям нельзя нанести существенный урон
-
-// 20241116
-// Убрал надпись у проигравшего вассала "Ваш вассал перешел *****"
-// Добавил очки власти за нанесение урона
-// Переработал начисление очков власти при поражении/победе, теперь 20/10% очков проигравшего сюзерена/вассала разделяются среди команды относительно нанесенного урона
-// Теперь если тебя взяли под крыло по терпимости, то тоже 20/10% очков забирают у сюзерена/вассала по равну среди команды
-
-// 20241109
-// Первый таймер терпимости теперь с объявления войны, а не с начала игры
-// Добавил запрет на самоуничтожение главного замка
-// Добавил очки власти (пока считаются просто за победу/поражение). Если проиграл вассал, то сюзеренам +300 и -500, вассалам +250, -300. Если проиграл сюзерен, то сюзеренам +1000 и -1000, вассалам +500 и -500.
-// Также добавил автоматическую сменю сюзерена на того у кого больше всего очков власти.
-
-// class Queue<T> {
-//     public constructor(
-//         private elements: Record<number, T> = {},
-//         private head: number = 0,
-//         private tail: number = 0
-//     ) { }
-//     public enqueue(element: T): void {
-//         this.elements[this.tail] = element;
-//         this.tail++;
-//     }
-//     public dequeue(): T {
-//         const item = this.elements[this.head];
-//         delete this.elements[this.head];
-//         this.head++;
-
-//         return item;
-//     }
-//     public peek(): T {
-//         return this.elements[this.head];
-//     }
-//     public get length(): number {
-//         return this.tail - this.head;
-//     }
-//     public get isEmpty(): boolean {
-//         return this.length === 0;
-//     }
-// }
-
-// class GameField {
-//     /** номера команд в ячейках, -1 - команды нет */
-//     public field_teamNum : Array<Array<number>>;
-//     /** (будующие) номера команд в ячейках, -1 - команды нет */
-//     private _nextField_teamNum : Array<Array<number>>;
-//     private _fillingStage: number;
-//     private _fillingSettlementNum: number;
-//     private _queue : Queue<Cell>;
-
-//     constructor() {
-//         let scenaWidth  = ActiveScena.GetRealScena().Size.Width;
-//         let scenaHeight = ActiveScena.GetRealScena().Size.Height;
-
-//         this.field_teamNum = new Array<Array<number>>();
-//         this._nextField_teamNum = new Array<Array<number>>();
-//         for (var i = 0; i < scenaHeight; i++) {
-//             this.field_teamNum.push(new Array<number>());
-//             this._nextField_teamNum.push(new Array<number>());
-//             for (var j = 0; j < scenaWidth; j++) {
-//                 this.field_teamNum[i].push(-1);
-//                 this._nextField_teamNum[i].push(-1);
-//             }
-//         }
-
-//         this._fillingStage = 0;
-//         this._queue = new Queue<Cell>();
-//         this._fillingSettlementNum = 0;
-//     }
-
-//     public OnEveryTick(gameTickNum: number) {
-//         if (this._fillingStage == 0) {
-//         } else if (this._fillingStage == 1) {
-//         } else if (this._fillingStage == 2) {
-//         }
-//     }
-// }
-
-function distance_Chebyshev (x1:number, y1:number, x2:number, y2:number) {
+/**
+ * Рассчитывает расстояние Чебышева между двумя точками.
+ */
+function chebyshevDistance(x1: number, y1: number, x2: number, y2: number): number {
     return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2));
 }
 
-export class AutoFFAPlugin extends HordePluginBase {
-    /** поселения */
-    _settlements: Array<Settlement>;
-    /** текущие команды в игре, -1 это вне игры */
-    _settlements_teamNum : Array<number>;
-    /** перевод settlementUid в settlementNum */
-    _opSettlementUidToSettlementNum : Array<number>;
-    /** таблица мира */
-    _settlements_settlements_diplomacyStatus : Array<Array<DiplomacyStatus>>;
+/**
+ * Основной класс плагина для игрового режима Auto FFA.
+ */
+export class AutoFfaPlugin extends HordePluginBase {
+    // ==================================================================================================
+    // Константы
+    // ==================================================================================================
 
-    /** ид поселения-сюзерена, -1 значит нету */
-    _settlements_suzerainNum : Array<number>;
-    /** лимит популяция у вассалов */
-    _vassal_limitPeople : number = 60;
-    /** лимит ресурсов у вассалов */
-    _vassal_limitResources : number = 1000;
-    /** число ресурсов сюзерена после которого он щедрится */
-    _suzerain_generosityThreshold : number = 5000;
+    private readonly GAME_CYCLE_PERIOD = 100;
+    private readonly TICK_OFFSET = {
+        TRIBUTES: 11,
+        GENEROSITY: 22,
+        MIGRATIONS: 33,
+        PEACE_TREATY_CHECK: 44,
+        DECORATORS: 55,
+        PROMOTIONS: 66,
+        REWARDS: 77,
+        DEFEATS: 88,
+        BOUNTY_CHECK: 95,
+        GAME_END_CHECK: 99,
+    };
 
-    /** конфиг замка у поселений */
-    _settlements_castleCfg : Array<UnitConfig>;
-    /** главный замок поселения */
-    _settlements_castle: Array<Unit>;
-    /** рамка вокруг главного замка */
-    _settlements_castleFrame: Array<GeometryVisualEffect>;
+    // ==================================================================================================
+    // Приватные свойства
+    // ==================================================================================================
 
-    /** флаг, что поселение проиграло */
-    _settlements_isDefeat : Array<boolean>;
+    private participants: Map<number, FfaParticipant> = new Map();
+    private teams: Map<number, Team> = new Map();
+    private settlementUidToParticipantId: Map<string, number> = new Map();
+    private unitCfgUidToPowerPerHp: Map<string, number> = new Map();
 
-    /** имена поселений */
-    _settlements_name : Array<string>;
+    private powerPointDecorators: Map<number, StringVisualEffect> = new Map();
+    private statusDecorators: Map<number, StringVisualEffect> = new Map();
+    private castleFrames: Map<number, GeometryVisualEffect> = new Map();
 
-    /** время победы противника у команд */
-    _teams_lastVictoryGameTickNum : Array<number>;
-    /** номер оповещения остальных врагов */
-    _teams_truceNotificationNumber : Array<number>;
-    /** время перемирия */
-    _team_truceTime : number = 5 * 60 * 50;
+    private isGameFinished = false;
+    private readonly settings: AutoFFASettings;
+    private bountyParticipant: FfaParticipant | null = null;
+    private nextBountyCheckTick = 0;
+    private initialPeaceEndTick = 0; // Тик, когда закончится начальный мир
 
-    /** флаг, что игра закончилась */
-    _endGame : boolean = false;
+    // ==================================================================================================
+    // Конструктор
+    // ==================================================================================================
 
-    /** период для повторого игрового цикла */
-    _gameCyclePeriod : number = 100;
-
-    /** очки власти */
-    _settlements_powerPoints : Array<number>;
-    /** строка-декоратор для отображения очков */
-    _settlements_powerPointStrDecorators : Array<StringVisualEffect>;
-    /** map uid - очки власти на единицу здоровья */
-    _opCfgUidToPowerPointPerHp : Map<string, number>;
-    /** таблица очков власти за атаку */
-    _settlements_settlements_powerPoints : Array<Array<number>>;
-    /** доля отнятие очков у сюзерена */
-    _suzerain_powerPoints_takenPercentage : number = 0.20;
-    /** доля отнятие очков у вассала */
-    _vassal_powerPoints_takenPercentage : number = 0.10;
-
-    /** базовая доля начисления за очки власти */
-    _powerPoints_rewardPercentage : number = 0.10;
-    /** время следующего начисления награды за очки власти */
-    _settlements_nextRewardTime : Array<number>;
-
-    /** строка-декоратор для отображения статуса игрока */
-    _settlements_statusStrDecorators : Array<StringVisualEffect>;
-
-    public constructor() {
-        super("Auto FFA");
-
-        this.log.logLevel = LogLevel.Debug;
-
-        this._settlements                   = new Array<Settlement>();
-        this._settlements_teamNum           = new Array<number>();
-        this._teams_lastVictoryGameTickNum  = new Array<number>();
-        this._teams_truceNotificationNumber = new Array<number>();
-        this._opSettlementUidToSettlementNum = new Array<any>();
-        this._settlements_suzerainNum = new Array<number>();
-        this._settlements_statusStrDecorators = new Array<StringVisualEffect>();
-        this._settlements_nextRewardTime = new Array<number>();
-        this._settlements_settlements_powerPoints = new Array<Array<number>>();
-        this._opCfgUidToPowerPointPerHp = new Map<string, number>();
-        this._settlements_powerPoints = new Array<number>();
-        this._settlements_powerPointStrDecorators = new Array<StringVisualEffect>();
-        this._settlements_name = new Array<string>();
-        this._settlements_isDefeat = new Array<boolean>();
-        this._settlements_castleFrame = new Array<GeometryVisualEffect>();
-        this._settlements_castleCfg = new Array<UnitConfig>();
-        this._settlements_castle    = new Array<Unit>();
-        this._settlements_settlements_diplomacyStatus = new Array<Array<DiplomacyStatus>>();
+    constructor(settings: AutoFFASettings) {
+        super("Auto FFA (OOP)");
+        this.settings = settings;
+        this.log.logLevel = LogLevel.Info;
     }
 
-    public onFirstRun() {
-        var message =
-        "Добро пожаловать в auto FFA!\n" +
-        "Стань единственным сюзереном этих земель!\n" +
-        "Объявлен всеобщий временный мир.";
-        broadcastMessage(message, createHordeColor(255, 255, 140, 140));
+    // ==================================================================================================
+    // Переопределения HordePluginBase
+    // ==================================================================================================
+
+    public onFirstRun(): void {
+        broadcastMessage("Добро пожаловать в Auto FFA!\nКаждый сам за себя! Уничтожьте вражеский замок, чтобы сделать его своим вассалом.", createHordeColor(255, 255, 140, 140));
     }
 
-    public onEveryTick(gameTickNum: number) {
-        var FPS = HordeResurrection.Engine.Logic.Battle.BattleController.GameTimer.CurrentFpsLimit;
-
-        if (gameTickNum == 1) {
-            this._Init();
-        } else if (gameTickNum < 50 * 10) {
-        } else if (gameTickNum == 50 * 10) {
-            var message =
-            "Правила игры:\n" +
-            "\t1. Войны идут дуэлями\n" +
-            "\t2. Победил остался сюзереном\n";
-            broadcastMessage(message, createHordeColor(255, 255, 140, 140));
-        } else if (gameTickNum < 50 * 30) {
-        } else if (gameTickNum == 50 * 30) {
-            var message =
-            "\t3. Проиграл (потерял главный замок) стал вассалом\n" +
-            "\t4. Вассал отдает ресы (>" + this._vassal_limitResources + " + 10% очков власти) своему сюзерену\n" +
-            "\t5. Вассал имеет лимит людей (" + this._vassal_limitPeople + " + 0.2% очков власти)\n";
-            broadcastMessage(message, createHordeColor(255, 255, 140, 140));
-        } else if (gameTickNum < 50 * 50) {
-        } else if (gameTickNum == 50 * 50) {
-            var message =
-            "\t6. Вассал проиграл, то на чужую сторону перешел\n" +
-            "\t7. После " + (this._team_truceTime / (60*50)) + " минут, сюзерен без врага присоединяется к слабейшей команде\n" +
-            "\t8. Сюзерен щедрый (делится с вассалами) если ресурса > " + this._suzerain_generosityThreshold + "\n";
-            broadcastMessage(message, createHordeColor(255, 255, 140, 140));
-        } else if (gameTickNum < 50 * 70) {
-        } else if (gameTickNum == 50 * 70) {
-            var message =
-            "\t9. Сюзерен тот у кого больше очков власти (прибавляются за победы, сражения, отнимаются за поражения, помощь)\n" +
-            "\t10. После налогов и зарплат идет начисление ресурсов " + Math.round(this._powerPoints_rewardPercentage * 100) + " % от очков власти\n" +
-            "\t11. Урон мирным не наносится\n";
-            broadcastMessage(message, createHordeColor(255, 255, 140, 140));
-        } else if (gameTickNum < 50 * 90) {
-        } else if (gameTickNum == 50 * 90) {
-            var message =
-            "Правила оглашены, время для битвы настало!\n";
-            broadcastMessage(message, createHordeColor(255, 255, 140, 140));
-        } else if (gameTickNum < 50 * 100) {
-        } else if (!this._endGame) {
-            var globalGameTickNum = gameTickNum;
-            gameTickNum -= 50*100;
-
-            if (gameTickNum % this._gameCyclePeriod == 11) {
-                this._VassalTribute(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 22) {
-                this._SuzerainGenerosity(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 33) {
-                this._TeamMigration(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 44) {
-                this._ChoiseEnemyTeam(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 55) {
-                this._UpdatePowerPointStrDecorators(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 66) {
-                this._AutomaticChangeSuzerain(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 77) {
-                this._SettlementsReward(globalGameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 88) {
-                this._DeffeatCheck(gameTickNum);
-            } else if (gameTickNum % this._gameCyclePeriod == 99) {
-                this._EndGameCheck(gameTickNum);
-            } else {
-
-            }
-        }
-    }
-
-    private _Init() {
-        var scenaSettlements = ActiveScena.GetRealScena().Settlements;
-
-        // поселения в игре
-
-        var settlementsUid : Array<number> = new Array<number>();
-        for (var player of Players) {
-            var realPlayer   = player.GetRealPlayer();
-            var settlement   = realPlayer.GetRealSettlement();
-
-            if (isReplayMode() && !realPlayer.IsReplay) {
-                continue;
-            }
-            if (settlementsUid.find((settlementUid) => { return (settlementUid == Number.parseInt(settlement.Uid)); })) {
-                continue;
-            }
-            this.log.info("Замечен игрок поселения ", settlement.Uid);
-            settlementsUid.push(Number.parseInt(settlement.Uid));
-        }
-        settlementsUid.sort();
-
-        // поселения
-
-        this._opSettlementUidToSettlementNum = new Array<any>(ActiveScena.GetRealScena().Settlements.Count).fill(-1);
-        for (var settlementNum = 0; settlementNum < settlementsUid.length; settlementNum++) {
-            var settlement = scenaSettlements.Item.get(settlementsUid[settlementNum] + '');
-
-            let someCastle = settlement.Units.GetCastleOrAnyUnit();
-            if (!someCastle || !someCastle.Cfg.HasMainBuildingSpecification) {
-                this.log.info("У поселения нет замка, игнорим ", settlement.Uid);
-                settlementsUid.splice(settlementNum--, 1);
-                continue;
-            }
-            this.log.info("Добавляем поселение ", settlement.Uid);
-            this._opSettlementUidToSettlementNum[Number.parseInt(settlement.Uid)] = this._settlements.length;
-            this._settlements.push(settlement);
-        }
-
-        // объявляем мир между всеми
-
-        this._settlements_settlements_diplomacyStatus.length = this._settlements.length;
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_settlements_diplomacyStatus[settlementNum] = new Array<DiplomacyStatus>(this._settlements.length);
-            for (var otherSettlementNum = 0; otherSettlementNum < this._settlements.length; otherSettlementNum++) {
-                if (settlementNum == otherSettlementNum) {
-                    this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] = DiplomacyStatus.Alliance;
-                    continue;
-                }
-
-                this._settlements[settlementNum].Diplomacy.DeclarePeace(this._settlements[otherSettlementNum]);
-                this._settlements[otherSettlementNum].Diplomacy.DeclarePeace(this._settlements[settlementNum]);
-                this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] = DiplomacyStatus.Neutral;
-            }
-        }
-
-        // инициализируем команды
-
-        for (var settlementNum = 0, teamNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_teamNum.push(teamNum++);
-            this._teams_lastVictoryGameTickNum.push(0);
-            this._teams_truceNotificationNumber.push(0);
-        }
-
-        // инициализируем сюзеренов
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_suzerainNum.push(-1);
-        }
-
-        // инициализируем имена поселений
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_name.push("");
-        }
-        for (var player of Players) {
-            var realPlayer   = player.GetRealPlayer();
-            var settlement   = realPlayer.GetRealSettlement();
-
-            if (isReplayMode() && !realPlayer.IsReplay) {
-                continue;
-            }
-
-            // ищем номер поселения
-            var settlementNum : number = settlementsUid.findIndex((Uid) => { return Uid == Number.parseInt(settlement.Uid)});
-            if (settlementNum == -1) {
-                continue;
-            }
-            this._settlements_name[settlementNum] += (this._settlements_name[settlementNum].length == 0 ? "" : "|" ) + realPlayer.Nickname;
-        }
-
-        // инициализируем конфиги замков
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            let someCastle = this._settlements[settlementNum].Units.GetCastleOrAnyUnit();
-            if (!someCastle || !someCastle.Cfg.HasMainBuildingSpecification) {
-                broadcastMessage("У поселения " + this._settlements_name[settlementNum] + " нет замка!", createHordeColor(255, 255, 0, 0));
-                //this._settlements_castleCfg.push(null);
-                //this._settlements_castle.push(null);
-
-                // прерываем игру
-                broadcastMessage("AutoFFA не поддерживает эту карту!", createHordeColor(255, 255, 0, 0));
-                this._endGame = true;
-                return;
-            } else {
-                this._settlements_castleCfg.push(someCastle.Cfg);
-                this._settlements_castle.push(someCastle);
-            }
-        }
-
-        // включаем кастомные условия поражения
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_isDefeat.push(false);
-            // включаем кастомные условия поражения
-            var existenceRule        = this._settlements[settlementNum].RulesOverseer.GetExistenceRule();
-            var principalInstruction = ScriptUtils.GetValue(existenceRule, "PrincipalInstruction");
-            ScriptUtils.SetValue(principalInstruction, "AlmostDefeatCondition", HordeClassLibrary.World.Settlements.Existence.AlmostDefeatCondition.Custom);
-            ScriptUtils.SetValue(principalInstruction, "TotalDefeatCondition", HordeClassLibrary.World.Settlements.Existence.TotalDefeatCondition.Custom);
-            ScriptUtils.SetValue(principalInstruction, "VictoryCondition", HordeClassLibrary.World.Settlements.Existence.VictoryCondition.Custom);
-        }
-
-        // пишем правила игрокам
-
-        var message =
-            "Правила игры:\n" +
-            "\t1. Войны идут дуэлями\n" +
-            "\t2. Победил остался сюзереном\n" +
-            "\t3. Проиграл (потерял главный замок) стал вассалом\n" +
-            "\t4. Вассал отдает ресы (>" + this._vassal_limitResources + " + 10% очков власти) своему сюзерену\n" +
-            "\t5. Вассал имеет лимит людей (" + this._vassal_limitPeople + " + 0.2% очков власти)\n" +
-            "\t6. Вассал проиграл, то на чужую сторону перешел\n" +
-            "\t7. После " + (this._team_truceTime / (60*50)) + " минут, сюзерен без врага присоединяется к слабейшей команде\n" +
-            "\t8. Сюзерен щедрый (делится с вассалами) если ресурса > " + this._suzerain_generosityThreshold + "\n" +
-            "\t9. Сюзерен тот у кого больше очков власти (прибавляются за победы, сражения, отнимаются за поражения, помощь)\n" +
-            "\t10. После налогов и зарплат идет начисление ресурсов " + Math.round(this._powerPoints_rewardPercentage * 100) + " % от очков власти\n" +
-            "\t11. Урон мирным не наносится\n";
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            var someCastle = this._settlements_castle[settlementNum];
-
-            var strDecObj = spawnString(
-                ActiveScena,
-                message,
-                createPoint(32*(someCastle.Cell.X + 5), 32*(someCastle.Cell.Y)),
-                50*80);
-            strDecObj.Height    = 20;
-            strDecObj.Color     = createHordeColor(255, 255, 255, 255);
-            strDecObj.DrawLayer = DrawLayer.Birds;
-            strDecObj.Font      = FontUtils.DefaultFont;
-        }
-
-        // инициализируем рамки замков
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            let position            = this._settlements_castle[settlementNum].Position;
-            let ticksToLive         = GeometryVisualEffect.InfiniteTTL;
-            this._settlements_castleFrame.push(spawnGeometry(ActiveScena, this._CreateCastleFrameBuffer(settlementNum), position, ticksToLive));
-        }
-
-        // инициализируем очки власти
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_powerPoints.push(1500);
-
-            var someCastle = this._settlements_castle[settlementNum];
-            var strDecObj = spawnString(
-                ActiveScena,
-                "Очки власти: " + Math.round(this._settlements_powerPoints[settlementNum]),
-                createPoint(0, 0),
-                10*60*60*50); // 10 часов
-            strDecObj.Height    = 22;
-            // strDecObj.Color     = createHordeColor(255, 255, 255, 255)
-            // this._settlements[settlementNum].SettlementColor;
-            strDecObj.Color     = createHordeColor(
-                255,
-                Math.min(255, this._settlements[settlementNum].SettlementColor.R + 128),
-                Math.min(255, this._settlements[settlementNum].SettlementColor.G + 128),
-                Math.min(255, this._settlements[settlementNum].SettlementColor.B + 128)
-            );
-            strDecObj.DrawLayer = DrawLayer.Birds;
-            strDecObj.Font      = FontUtils.DefaultVectorFont;
-
-            this._settlements_powerPointStrDecorators.push(strDecObj);
-        }
-
-        // создаем строку статуса
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            var someCastle = this._settlements_castle[settlementNum];
-            var strDecObj = spawnString(
-                ActiveScena,
-                "сюзерен",
-                createPoint(0, 0),
-                10*60*60*50); // 10 часов
-            strDecObj.Height    = 22;
-            strDecObj.Color     = createHordeColor(
-                255,
-                Math.min(255, this._settlements[settlementNum].SettlementColor.R + 128),
-                Math.min(255, this._settlements[settlementNum].SettlementColor.G + 128),
-                Math.min(255, this._settlements[settlementNum].SettlementColor.B + 128)
-            );
-            strDecObj.DrawLayer = DrawLayer.Birds;
-            strDecObj.Font      = FontUtils.DefaultVectorFont;
-
-            this._settlements_statusStrDecorators.push(strDecObj);
-        }
-
-        // подписываемся на событие атаки для начисление очков власти
-        
-        this._settlements_settlements_powerPoints.length = this._settlements.length;
-        for (var i = 0; i < this._settlements.length; i++) {
-            this._settlements_settlements_powerPoints[i] = new Array<number>(this._settlements.length).fill(0);
-        }
-
-        var _this = this;
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements[settlementNum].Units.UnitCauseDamage.connect(
-                function (sender: any, args: any) {
-                    // TriggeredUnit - атакующий юнит
-                    // VictimUnit - атакованный юнит
-                    // Damage - урон до вычита брони
-                    // HurtType - тип атаки, Mele
-                    
-                    var settlementNum      = _this._opSettlementUidToSettlementNum[args.TriggeredUnit.Owner.Uid];
-                    var otherSettlementNum = _this._opSettlementUidToSettlementNum[args.VictimUnit.Owner.Uid];
-
-                    // проверяем, что поселения учавствуют в битве FFA, есть замок
-                    if (settlementNum == -1 || otherSettlementNum == -1 || _this._settlements_castle[settlementNum] == null) {
-                        return;
-                    }
-
-                    // если поселения враги
-                    if (_this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] == DiplomacyStatus.War) {
-                        // считаем очки власти за удар
-                        var powerPointPerHp : number = 0;
-                        if (_this._opCfgUidToPowerPointPerHp.has(args.VictimUnit.Cfg.Uid)) {
-                            powerPointPerHp = _this._opCfgUidToPowerPointPerHp.get(args.VictimUnit.Cfg.Uid) as number;
-                        } else {
-                            var cfg = args.VictimUnit.Cfg;
-                            powerPointPerHp = 0.01 * (cfg.CostResources.Gold + cfg.CostResources.Metal + cfg.CostResources.Lumber + 50*cfg.CostResources.People) / cfg.MaxHealth;
-                            _this._opCfgUidToPowerPointPerHp.set(args.VictimUnit.Cfg.Uid, powerPointPerHp);
-                        }
-                        var deltaPoints : number = args.Damage * powerPointPerHp * Math.log(Math.max(1,
-                            distance_Chebyshev(
-                                _this._settlements_castle[settlementNum].Cell.X,
-                                _this._settlements_castle[settlementNum].Cell.Y,
-                                args.TriggeredUnit.Cell.X,
-                                args.TriggeredUnit.Cell.Y
-                            )));
-
-                        // учитываем очки власти
-                        _this._settlements_powerPoints[settlementNum] += deltaPoints;
-                        _this._settlements_settlements_powerPoints[settlementNum][otherSettlementNum] += deltaPoints;
-                    }
-                    // мирным поселениям восстанавливаем хп
-                    else if (_this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] == DiplomacyStatus.Neutral) {
-                        if (args.VictimUnit.Health - args.Damage <= 0) {
-                            args.VictimUnit.Health += args.Damage;
-                        } else {
-                            args.VictimUnit.Health += Math.min(args.VictimUnit.Cfg.MaxHealth - args.VictimUnit.Health, args.Damage);
-                        }
-                    }
-                }
-            );
-        }
-
-        // инициализируем время до следующей награды
-
-        this._settlements_nextRewardTime.length = this._settlements.length;
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            var settlementCensusModel = ScriptUtils.GetValue(this._settlements[settlementNum].Census, "Model");
-            this._settlements_nextRewardTime[settlementNum] = settlementCensusModel.TaxAndSalaryUpdatePeriod;
-            log.info("Поселение ", settlementNum, " до следующей награды ", this._settlements_nextRewardTime[settlementNum]);
-        }
-
-        // переустанавливаем замки через метод
-
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._SettlementSetCastle(settlementNum, this._settlements_castle[settlementNum]);
-        }
-    }
-
-    private _VassalTribute(gameTickNum: number) {
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_suzerainNum[settlementNum] == -1) {
-                continue;
-            }
-
-            var vassal_limitResources = Math.floor(this._vassal_limitResources + 0.1 * this._settlements_powerPoints[settlementNum]);
-            var vassal_limitPeople    = Math.floor(this._vassal_limitPeople + 0.002 * this._settlements_powerPoints[settlementNum]);
-
-            // отбираем излишки
-            var tribute = createResourcesAmount(
-                Math.max(0, this._settlements[settlementNum].Resources.Gold - vassal_limitResources),
-                Math.max(0, this._settlements[settlementNum].Resources.Metal - vassal_limitResources),
-                Math.max(0, this._settlements[settlementNum].Resources.Lumber - vassal_limitResources),
-                Math.max(0, this._settlements[settlementNum].Resources.FreePeople - vassal_limitPeople)
-            );
-
-            if (tribute.Gold == 0 && tribute.Metal == 0 && tribute.Lumber == 0 && tribute.People == 0) {
-                continue;
-            }
-            this._settlements[settlementNum].Resources.TakeResources(tribute);
-            
-            var tribute = createResourcesAmount(
-                tribute.Gold,
-                tribute.Metal,
-                tribute.Lumber,
-                0
-            );
-
-            // передаем сюзерену
-            if (tribute.Gold == 0 && tribute.Metal == 0 && tribute.Lumber == 0) {
-                continue;
-            }
-            this._settlements[this._settlements_suzerainNum[settlementNum]].Resources.AddResources(tribute);
-        }
-    }
-
-    private _SuzerainGenerosity(gameTickNum: number) {
-        var teamsInGame = Array.from(new Set(this._settlements_teamNum));
-        for (var teamNum of teamsInGame) {
-            var suzerainNum = this._TeamGetSuzerainNum(teamNum);
-
-            // определяем ресурсы для щедрости
-            var generosity = createResourcesAmount(
-                Math.max(0, this._settlements[suzerainNum].Resources.Gold - this._suzerain_generosityThreshold),
-                Math.max(0, this._settlements[suzerainNum].Resources.Metal - this._suzerain_generosityThreshold),
-                Math.max(0, this._settlements[suzerainNum].Resources.Lumber - this._suzerain_generosityThreshold),
-                0
-            );
-
-            var vassalsNum        = this._TeamGetSettlements(teamNum).filter((settlementNum) => settlementNum != suzerainNum);
-            if (vassalsNum.length == 0) {
-                continue;
-            }
-
-            // щедрость равномерно делим по всем
-            generosity = createResourcesAmount(
-                Math.floor(generosity.Gold / vassalsNum.length),
-                Math.floor(generosity.Metal / vassalsNum.length),
-                Math.floor(generosity.Lumber / vassalsNum.length),
-                0
-            );
-
-            // проверяем, что есть ресурсы для щедрости
-            if (generosity.Gold == 0 && generosity.Metal == 0 && generosity.Lumber == 0) {
-                continue;
-            }
-
-            // делимся деньгами с вассалами
-            var givenGold   = 0;
-            var givenMetal  = 0;
-            var givenLumber = 0;
-            for (var vassalNum of vassalsNum) {
-                var pay = createResourcesAmount(
-                    Math.max(0, Math.min(generosity.Gold, Math.floor(this._vassal_limitResources + 0.1 * this._settlements_powerPoints[vassalNum]) - this._settlements[vassalNum].Resources.Gold)),
-                    Math.max(0, Math.min(generosity.Metal, Math.floor(this._vassal_limitResources + 0.1 * this._settlements_powerPoints[vassalNum]) - this._settlements[vassalNum].Resources.Metal)),
-                    Math.max(0, Math.min(generosity.Lumber, Math.floor(this._vassal_limitResources + 0.1 * this._settlements_powerPoints[vassalNum]) - this._settlements[vassalNum].Resources.Lumber)),
-                    0
-                );
-
-                // проверяем, что вассалу нужна щедрость
-                if (pay.Gold == 0 && pay.Metal == 0 && pay.Lumber == 0) {
-                    continue;
-                }
-                
-                givenGold   += pay.Gold;
-                givenMetal  += pay.Metal;
-                givenLumber += pay.Lumber;
-                this._settlements[vassalNum].Resources.AddResources(pay);
-            }
-
-            // отнимаем щедрость у сюзерена
-            if (givenGold != 0 || givenMetal != 0 || givenLumber != 0) {
-                this._settlements[suzerainNum].Resources.TakeResources(createResourcesAmount(givenGold, givenMetal, givenLumber, 0));
-            }
-        }
-    }
-
-    private _TeamMigration(gameTickNum: number) {
-        // обрабатываем вассалов
-        for (var loserVassalNum = 0; loserVassalNum < this._settlements.length; loserVassalNum++) {
-            // проверяем, что вассал и лишился замка
-            if (!this._settlements_isDefeat[loserVassalNum]
-                || this._settlements_suzerainNum[loserVassalNum] == -1) {
-                continue;
-            }
-
-            // проверяем, что есть победитель
-            var loserTeamNum    = this._settlements_teamNum[loserVassalNum];
-            var winnerTeamNum   = this._TeamGetEnemyTeamNum(loserTeamNum);
-            if (winnerTeamNum == -1) {
-                continue;
-            }
-            this.log.info("Вассал ", loserVassalNum, " проиграл, он переходит из ", loserTeamNum, " в ", winnerTeamNum);
-
-            // оповещаем всех
-
-            var winnerSuzerainNum    = this._TeamGetSuzerainNum(winnerTeamNum);
-            var loserSuzerainNum     = this._TeamGetSuzerainNum(loserTeamNum);
-            var winnerSettlementsNum = this._TeamGetSettlements(winnerTeamNum);
-            var winnerTeamSize       = winnerSettlementsNum.length + 1;
-            var loserTeamSize        = this._TeamGetSettlements(winnerTeamNum).length - 1;
-            for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                if (loserVassalNum == settlementNum) {
-                    continue;
-                } else if (this._settlements_teamNum[settlementNum] == loserTeamNum) {
-                    var message : string = "Ваш вассал " + this._settlements_name[loserVassalNum] + " перешел на сторону врага!";
-                    var color   = this._settlements[loserVassalNum].SettlementColor;
-                    let msg     = createGameMessageWithSound(message, color);
-                    this._settlements[settlementNum].Messages.AddMessage(msg);
-                } else if (this._settlements_teamNum[settlementNum] == winnerTeamNum) {
-                    var message : string = "К вам присоединился вассал врага " + this._settlements_name[loserVassalNum];
-                    var color   = this._settlements[loserVassalNum].SettlementColor;
-                    let msg     = createGameMessageWithSound(message, color);
-                    this._settlements[settlementNum].Messages.AddMessage(msg);
-                } else {
-                    var message : string = "Баланс сил нарушен! Сюзерен " + this._settlements_name[winnerSuzerainNum] + " переманил вассала у " + this._settlements_name[loserSuzerainNum];
-                        + ", итого " + winnerTeamSize + " против " + loserTeamSize;
-                    var color   = createHordeColor(255, 150, 150, 150);
-                    let msg     = createGameMessageWithNoSound(message, color);
-                    this._settlements[settlementNum].Messages.AddMessage(msg);
-                }
-            }
-
-            // обновляем очки власти (отбираем у проигравшего вассала процент и распределяем его по всем)
-
-            this._TeamShareSettlementPowerPoints(winnerTeamNum, loserVassalNum);
-
-            // переводим вассала
-            
-            this._TeamAddVassal(winnerTeamNum, loserVassalNum);
-        }
-
-        // обрабатываем сюзеренов
-        for (var loserSuzerainNum = 0; loserSuzerainNum < this._settlements.length; loserSuzerainNum++) {
-            // проверяем, что сюзерен и проиграл
-            if (!this._settlements_isDefeat[loserSuzerainNum]
-                || this._settlements_suzerainNum[loserSuzerainNum] != -1) {
-                continue;
-            }
-
-            // проверяем, что есть победитель
-            var loserTeamNum  = this._settlements_teamNum[loserSuzerainNum];
-            var winnerTeamNum = this._TeamGetEnemyTeamNum(this._settlements_teamNum[loserSuzerainNum]);
-            if (winnerTeamNum == -1) {
-                continue;
-            }
-            var winnerSuzerainNum = this._TeamGetSuzerainNum(winnerTeamNum);
-
-            // обновляем очки власти
-
-            for (var loserSettlementNum = 0; loserSettlementNum < this._settlements.length; loserSettlementNum++) {
-                if (this._settlements_teamNum[loserSettlementNum] == loserTeamNum) {
-                    this._TeamShareSettlementPowerPoints(winnerTeamNum, loserSettlementNum);
-                }
-            }
-
-            // делаем всю команду вассалами
-
-            var vassalStr = "";
-            for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                if (this._settlements_teamNum[settlementNum] == this._settlements_teamNum[loserSuzerainNum]) {
-                    vassalStr += settlementNum + " ";
-                }
-            }
-            this.log.info("Сюзерен ", loserSuzerainNum, " проиграл, он переходит из ", this._settlements_teamNum[loserSuzerainNum], " в ", winnerTeamNum, " вместе с вассалами ", vassalStr);
-            
-            this._TeamAddSuzerain(winnerTeamNum, loserSuzerainNum);
-
-            // оповещаем всех
-
-            var winnerSettlementsNum = this._TeamGetSettlements(winnerTeamNum);
-            var winnerVassalsStr = "";
-            for (var settlementNum of winnerSettlementsNum) {
-                if (settlementNum == winnerSuzerainNum) {
-                    continue;
-                }
-                winnerVassalsStr += this._settlements_name[settlementNum] + " ";
-            }
-            broadcastMessage("Сюзерен " + this._settlements_name[winnerSuzerainNum] + " победил врага, теперь под его началом служат следующие вассалы:\n"
-                + winnerVassalsStr
-                , createHordeColor(255, 150, 150, 150)
-            );
-            for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                if (this._settlements_teamNum[settlementNum] == winnerTeamNum) {
-                    var message : string = "Вы стали ближе к правлению этими землями, ожидайте следующего врага!";
-                    var color   = createHordeColor(255, 150, 150, 150);
-                    let msg     = createGameMessageWithSound(message, color);
-                    this._settlements[settlementNum].Messages.AddMessage(msg);
-                }
-            }
-
-            // запоминаем такт победы и зануляем номер оповещения
-            this._teams_lastVictoryGameTickNum[winnerTeamNum]  = gameTickNum;
-            this._teams_truceNotificationNumber[winnerTeamNum] = 0;
-        }
-    }
-
-    private _ChoiseEnemyTeam(gameTickNum: number) {
-        var that = this;
-        const freeTeams = Array.from(new Set(this._settlements_teamNum)).filter((teamNum) => {
-            return that._TeamGetEnemyTeamNum(teamNum) == -1;
-        });
-        let rnd = ActiveScena.GetRealScena().Context.Randomizer;
-        if (freeTeams.length == 1) {
-            // у команды долго нет врага
-            if (this._teams_lastVictoryGameTickNum[freeTeams[0]] + 0.5*this._team_truceTime < gameTickNum && this._teams_truceNotificationNumber[freeTeams[0]] == 0) {
-                broadcastMessage("Сюзерен " + this._settlements_name[this._TeamGetSuzerainNum(freeTeams[0])] + " теряет терпение и скоро вступится за слабого!",
-                    createHordeColor(255, 255, 140, 140));
-                this._teams_truceNotificationNumber[freeTeams[0]] = 1;
-            } else if (this._teams_lastVictoryGameTickNum[freeTeams[0]] + this._team_truceTime - 50*60 < gameTickNum && this._teams_truceNotificationNumber[freeTeams[0]] == 1) {
-                broadcastMessage("Сюзерен " + this._settlements_name[this._TeamGetSuzerainNum(freeTeams[0])] + " потерял терпение и через минуту вступится за слабого!",
-                    createHordeColor(255, 255, 140, 140));
-                this._teams_truceNotificationNumber[freeTeams[0]] = 2;
-            } else if (this._teams_lastVictoryGameTickNum[freeTeams[0]] + this._team_truceTime < gameTickNum) {
-                this.log.info("team ", freeTeams[0], " many times in peace");
-                // вычисляем силу поселений
-                var teamsTop = Array.from(new Set(this._settlements_teamNum));
-                var teams_power = new Array<number>(this._settlements.length).fill(0);
-                for (var teamNum of teamsTop) {
-                    teams_power[teamNum] = this._TeamGetPower(teamNum);
-                }
-                teamsTop.sort((teamA: any, teamB: any) => teams_power[teamA] - teams_power[teamB]);
-                for (var teamNum of teamsTop) {
-                    this.log.info("team ", teamNum, " power ", teams_power[teamNum]);
-                }
-
-                // выбираем какая команда куда мигрирует
-                if (teamsTop[0] == freeTeams[0]) {
-                    this.log.info("team ", freeTeams[0], " new vassal of ", teamsTop[0]);
-
-                    // отнимаем очки власти 
-
-                    for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                        if (this._settlements_teamNum[settlementNum] == freeTeams[0]) {
-                            this._TeamShareSettlementPowerPoints(teamsTop[0], settlementNum);
-                        }
-                    }
-
-                    // объединяем команды
-
-                    broadcastMessage("Сюзерен " + this._settlements_name[this._TeamGetSuzerainNum(freeTeams[0])] + " решил стать вассалом " + this._settlements_name[this._TeamGetSuzerainNum(teamsTop[1])],
-                        createHordeColor(255, 255, 140, 140));
-                    this._TeamAddSuzerain(teamsTop[1], this._TeamGetSuzerainNum(freeTeams[0]), true);
-                } else {
-                    this.log.info("team ", freeTeams[0], " new suzerain of ", teamsTop[0]);
-
-                    // отнимаем очки власти
-
-                    for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                        if (this._settlements_teamNum[settlementNum] == teamsTop[0]) {
-                            this._TeamShareSettlementPowerPoints(freeTeams[0], settlementNum);
-                        }
-                    }
-
-                    // объединяем команды
-
-                    broadcastMessage("Сюзерен " + this._settlements_name[this._TeamGetSuzerainNum(freeTeams[0])] + " решил стать сюзереном " + this._settlements_name[this._TeamGetSuzerainNum(teamsTop[0])],
-                        createHordeColor(255, 255, 140, 140));
-                    var enemyTeam = this._TeamGetEnemyTeamNum(teamsTop[0]);
-                    this._TeamAddSuzerain(freeTeams[0], this._TeamGetSuzerainNum(teamsTop[0]), true);
-
-                    // объявляем войну вражеской команде
-                    
-                    for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                        if (this._settlements_teamNum[settlementNum] != freeTeams[0]) {
-                            continue;
-                        }
-                        for (var otherSettlementNum = 0; otherSettlementNum < this._settlements.length; otherSettlementNum++) {
-                            if (this._settlements_teamNum[otherSettlementNum] == enemyTeam) {
-                                this._settlements[settlementNum].Diplomacy.DeclareWar(this._settlements[otherSettlementNum]);
-                                this._settlements[otherSettlementNum].Diplomacy.DeclareWar(this._settlements[settlementNum]);
-                                this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] = DiplomacyStatus.War;
-                                this._settlements_settlements_diplomacyStatus[otherSettlementNum][settlementNum] = DiplomacyStatus.War;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            while (freeTeams.length > 1) {
-                var number    = rnd.RandomNumber(0, freeTeams.length - 1);
-                var team1_num = freeTeams[number];
-                freeTeams.splice(number, 1);
-                number        = rnd.RandomNumber(0, freeTeams.length - 1);
-                var team2_num = freeTeams[number];
-                freeTeams.splice(number, 1);
-
-                var team1_suzerainNum = this._TeamGetSuzerainNum(team1_num);
-                var team2_suzerainNum = this._TeamGetSuzerainNum(team2_num);
-
-                var team1_settlements = this._TeamGetSettlements(team1_num);
-                var team2_settlements = this._TeamGetSettlements(team2_num);
-
-                var team1_vassalsStr = "";
-                var team2_vassalsStr = "";
-                for (var settlementNum of team1_settlements) {
-                    if (settlementNum == team1_suzerainNum) {
-                        continue;
-                    }
-                    team1_vassalsStr += this._settlements_name[settlementNum] + " ";
-                }
-                for (var settlementNum of team2_settlements) {
-                    if (settlementNum == team2_suzerainNum) {
-                        continue;
-                    }
-                    team2_vassalsStr += this._settlements_name[settlementNum] + " ";
-                }
-
-                //var message = "Между сюзереном " + this._settlements_name[team1_suzerainNum] + (team1_vassalsStr != "" ? " и вассалами " + team1_vassalsStr : "") + "\n"
-                //            + " и сюзереном " + this._settlements_name[team2_suzerainNum] + (team2_vassalsStr != "" ? " и вассалами " + team2_vassalsStr : "") + " объявлена война!\n";
-                var message = "Между сюзереном " + this._settlements_name[team1_suzerainNum] + " (" + (team1_settlements.length - 1) + " вассалов)"
-                    + " и сюзереном " + this._settlements_name[team2_suzerainNum] + " (" + (team2_settlements.length - 1) + " вассалов) объявлена война!\n";
-                broadcastMessage(message, createHordeColor(255, 255, 140, 140));
-
-                for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-                    if (this._settlements_teamNum[settlementNum] != team1_num) {
-                        continue;
-                    }
-                    for (var otherSettlementNum = 0; otherSettlementNum < this._settlements.length; otherSettlementNum++) {
-                        if (this._settlements_teamNum[otherSettlementNum] == team2_num) {
-                            this._settlements[settlementNum].Diplomacy.DeclareWar(this._settlements[otherSettlementNum]);
-                            this._settlements[otherSettlementNum].Diplomacy.DeclareWar(this._settlements[settlementNum]);
-                            this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] = DiplomacyStatus.War;
-                            this._settlements_settlements_diplomacyStatus[otherSettlementNum][settlementNum] = DiplomacyStatus.War;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private _UpdatePowerPointStrDecorators(gameTickNum: number) {
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_powerPointStrDecorators[settlementNum].Text = 
-                "Очки власти: " + Math.round(this._settlements_powerPoints[settlementNum]);
-        }
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            this._settlements_statusStrDecorators[settlementNum].Text = this._settlements_suzerainNum[settlementNum] == -1 ? "сюзерен" : "вассал";
-        }
-    }
-
-    private _AutomaticChangeSuzerain(gameTickNum: number) {
-        var settlementCheckFlag = new Array<boolean>(this._settlements.length).fill(false);
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (settlementCheckFlag[settlementNum]) {
-                continue;
-            }
-
-            var teamNum     = this._settlements_teamNum[settlementNum];
-            var suzerainNum = this._TeamGetSuzerainNum(teamNum);
-            
-            var teamSettlements = this._TeamGetSettlements(teamNum);
-            var powerfulSettlementNum   = suzerainNum;
-            var powerfulSettlementPower = this._settlements_powerPoints[powerfulSettlementNum];
-
-            for (var otherSettlementNum of teamSettlements) {
-                settlementCheckFlag[otherSettlementNum] = true;
-
-                if (powerfulSettlementPower < this._settlements_powerPoints[otherSettlementNum]) {
-                    powerfulSettlementNum   = otherSettlementNum;
-                    powerfulSettlementPower = this._settlements_powerPoints[otherSettlementNum];
-                }
-            }
-
-            // смена сюзерена!
-            if (powerfulSettlementNum != suzerainNum) {
-                this._TeamChangeSuzerain(teamNum, powerfulSettlementNum);
-                
-                // оповещаем о перестановке
-                var enemyTeamNum = this._TeamGetEnemyTeamNum(teamNum);
-                var message      = "Сюзерен " + this._settlements_name[suzerainNum] + " уступил своё сюзеренство " + this._settlements_name[powerfulSettlementNum];
-                for (var otherSettlementNum = 0; otherSettlementNum < this._settlements.length; otherSettlementNum++) {
-                    if (this._settlements_teamNum[otherSettlementNum] == teamNum
-                        || this._settlements_teamNum[otherSettlementNum] == enemyTeamNum
-                    ) {
-                        var color   = this._settlements[powerfulSettlementNum].SettlementColor;
-                        let msg     = createGameMessageWithSound(message, color);
-                        this._settlements[otherSettlementNum].Messages.AddMessage(msg);
-                    } else {
-                        var color   = this._settlements[powerfulSettlementNum].SettlementColor;
-                        let msg     = createGameMessageWithNoSound(message, color);
-                        this._settlements[otherSettlementNum].Messages.AddMessage(msg);
-                    }
-                }
-            }
-        }
-    }
-
-    private _SettlementsReward(gameTickNum: number) {
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_nextRewardTime[settlementNum] < gameTickNum) {
-                var settlementCensusModel = ScriptUtils.GetValue(this._settlements[settlementNum].Census, "Model");
-                this._settlements_nextRewardTime[settlementNum] += settlementCensusModel.TaxAndSalaryUpdatePeriod;
-
-                log.info("Поселение ", settlementNum, " до следующей награды ", this._settlements_nextRewardTime[settlementNum]);
-
-                if (this._settlements_powerPoints[settlementNum] < 10) {
-                    continue;
-                }
-
-                var reward = createResourcesAmount(
-                    Math.floor(this._powerPoints_rewardPercentage * this._settlements_powerPoints[settlementNum]),
-                    Math.floor(this._powerPoints_rewardPercentage * this._settlements_powerPoints[settlementNum]),
-                    Math.floor(this._powerPoints_rewardPercentage * this._settlements_powerPoints[settlementNum]),
-                    Math.floor(0.02 * this._powerPoints_rewardPercentage * this._settlements_powerPoints[settlementNum])
-                );
-                this._settlements[settlementNum].Resources.AddResources(reward);
-            }
-        }
-    }
-
-    private _DeffeatCheck(gameTickNum: number) {
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (!this._settlements_castle[settlementNum] || this._settlements_castle[settlementNum].IsDead) {
-                this.log.debug(this._settlements_name[settlementNum], "(", settlementNum, ") потерял главный замок, isDefeat = true");
-                this._settlements_isDefeat[settlementNum] = true;
-            } else {
-                this._settlements_isDefeat[settlementNum] = false;
-            }
-        }
-    }
-
-    private _EndGameCheck(gameTickNum: number) {
-        var winnerSuzerainNum = this._settlements_suzerainNum[0] == -1 ? 0 : this._settlements_suzerainNum[0];
-        var isVictory         = true;
-        for (var settlementNum = 1; settlementNum < this._settlements.length; settlementNum++) {
-            var suzerainNum = this._settlements_suzerainNum[settlementNum] == -1 ? settlementNum : this._settlements_suzerainNum[settlementNum];
-            if (winnerSuzerainNum != suzerainNum) {
-                isVictory = false;
-                break;
-            }
-        }
-
-        if (!isVictory) {
+    public onEveryTick(gameTickNum: number): void {
+        if (this.isGameFinished) return;
+
+        if (gameTickNum === 1) {
+            this.initialize();
             return;
         }
 
-        this._endGame = true;
+        // Проверяем окончание начального мирного периода
+        if (this.initialPeaceEndTick > 0 && gameTickNum >= this.initialPeaceEndTick) {
+            this.endInitialPeace();
+            this.initialPeaceEndTick = 0; // Сбрасываем, чтобы не вызывать снова
+        }
 
-        var message = "Единственным правителем земель стал " + this._settlements_name[winnerSuzerainNum] + "\n";
-        broadcastMessage(message, this._settlements[winnerSuzerainNum].SettlementColor);
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            //if (settlementNum == winnerSuzerainNum) {
-                this._settlements[settlementNum].Existence.ForceVictory();
-            //} else {
-            //    this._settlements[settlementNum].Existence.ForceTotalDefeat();
-            //}
+        this.displayInitialMessages(gameTickNum);
+        if (gameTickNum < 50 * 100) return; // Ждем отображения начальных сообщений
+
+        switch (gameTickNum % this.GAME_CYCLE_PERIOD) {
+            case this.TICK_OFFSET.TRIBUTES: this.processVassalTributes(); break;
+            case this.TICK_OFFSET.GENEROSITY: this.processSuzerainGenerosity(); break;
+            case this.TICK_OFFSET.MIGRATIONS: this.processTeamMigrations(gameTickNum); break;
+            case this.TICK_OFFSET.PEACE_TREATY_CHECK: this.managePeaceTreaties(gameTickNum); break;
+            case this.TICK_OFFSET.DECORATORS: this.updateDecorators(); break;
+            case this.TICK_OFFSET.PROMOTIONS: this.promoteNewSuzerains(); break;
+            case this.TICK_OFFSET.REWARDS: this.processPowerPointRewards(gameTickNum); break;
+            case this.TICK_OFFSET.DEFEATS: this.checkForDefeatedParticipants(); break;
+            case this.TICK_OFFSET.BOUNTY_CHECK: this.checkForBounty(gameTickNum); break;
+            case this.TICK_OFFSET.GAME_END_CHECK: this.checkForGameEnd(); break;
         }
     }
 
-    /** вернет номер враждующей команды, если нету, то -1 */
-    private _TeamGetEnemyTeamNum (teamNum: number) : number {
-        var enemy = -1;
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_teamNum[settlementNum] != teamNum) {
+    // ==================================================================================================
+    // Инициализация
+    // ==================================================================================================
+
+    private initialize(): void {
+        this.log.info("Инициализация Auto FFA...");
+
+        this.setupParticipantsAndTeams();
+        this.setInitialDiplomacy();
+        this.subscribeToEvents();
+        this.updateDecorators();
+
+        if (this.settings.enableInitialPeacePeriod) {
+            this.initialPeaceEndTick = this.settings.initialPeaceDurationTicks;
+        }
+
+        if (this.settings.enableBountyOnPoorest) {
+            this.nextBountyCheckTick = this.initialPeaceEndTick + this.settings.bountyCheckIntervalTicks;
+        }
+
+        this.log.info(`Инициализация завершена. Найдено ${this.participants.size} участников.`);
+    }
+
+    private setupParticipantsAndTeams(): void {
+        const sceneSettlements = ActiveScena.GetRealScena().Settlements;
+        const playerSettlementUids = new Set<string>();
+
+        for (const player of Players) {
+            const realPlayer = player.GetRealPlayer();
+            if (isReplayMode() && !realPlayer.IsReplay) continue;
+            playerSettlementUids.add(realPlayer.GetRealSettlement().Uid);
+        }
+
+        let participantIdCounter = 0;
+        for (const uid of Array.from(playerSettlementUids).sort()) {
+            const settlement = sceneSettlements.Item.get(uid);
+            const castle = settlement.Units.GetCastleOrAnyUnit();
+
+            if (!castle || !castle.Cfg.HasMainBuildingSpecification) {
+                this.log.warning(`Поселение ${uid} не имеет замка и будет проигнорировано.`);
                 continue;
             }
 
-            for (var otherSettlementNum = 0; otherSettlementNum < this._settlements.length; otherSettlementNum++) {
-                if (this._settlements_teamNum[otherSettlementNum] == teamNum) {
-                    continue;
+            const name = settlement.LeaderName;
+            const participant = new FfaParticipant(participantIdCounter, settlement, name, castle, this.settings);
+            participant.powerPoints = this.settings.initialPowerPoints;
+            
+            this.participants.set(participant.id, participant);
+            this.settlementUidToParticipantId.set(uid, participant.id);
+            
+            const team = new Team(participant.id, participant, this.settings);
+            this.teams.set(team.id, team);
+
+            this.createDecoratorsForParticipant(participant);
+            this.setCustomGameRules(settlement);
+
+            participantIdCounter++;
+        }
+    }
+
+    private setCustomGameRules(settlement: any): void {
+        const existenceRule = settlement.RulesOverseer.GetExistenceRule();
+        const principalInstruction = ScriptUtils.GetValue(existenceRule, "PrincipalInstruction");
+        ScriptUtils.SetValue(principalInstruction, "AlmostDefeatCondition", HordeClassLibrary.World.Settlements.Existence.AlmostDefeatCondition.Custom);
+        ScriptUtils.SetValue(principalInstruction, "TotalDefeatCondition", HordeClassLibrary.World.Settlements.Existence.TotalDefeatCondition.Custom);
+        ScriptUtils.SetValue(principalInstruction, "VictoryCondition", HordeClassLibrary.World.Settlements.Existence.VictoryCondition.Custom);
+    }
+
+    private setInitialDiplomacy(): void {
+        const allParticipants = Array.from(this.participants.values());
+        if (this.settings.enableInitialPeacePeriod) {
+            DiplomacyManager.establishPeaceAmongAll(allParticipants);
+        } else {
+            for (let i = 0; i < allParticipants.length; i++) {
+                for (let j = i + 1; j < allParticipants.length; j++) {
+                    DiplomacyManager.setDiplomacy(allParticipants[i], allParticipants[j], DiplomacyStatus.War);
                 }
+            }
+        }
+    }
 
-                if (this._settlements[settlementNum].Diplomacy.GetDiplomacyStatus(this._settlements[otherSettlementNum]) == DiplomacyStatus.War) {
-                    enemy = this._settlements_teamNum[otherSettlementNum];
-                    break;
+    private endInitialPeace(): void {
+        const allParticipants = Array.from(this.participants.values());
+        for (let i = 0; i < allParticipants.length; i++) {
+            for (let j = i + 1; j < allParticipants.length; j++) { 
+                if (allParticipants[i].teamId !== allParticipants[j].teamId) {
+                    DiplomacyManager.setDiplomacy(allParticipants[i], allParticipants[j], DiplomacyStatus.War);
                 }
             }
-            break;
         }
-        return enemy;
+        const message = "Время подготовки истекло! Война начинается!";
+        broadcastMessage(message, createHordeColor(255, 255, 255, 0)); // Желтый цвет
+        this.log.info(message);
     }
 
-    private _TeamGetSuzerainNum (teamNum: number) : number {
-        var res = -1;
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_teamNum[settlementNum] == teamNum) {
-                res = this._settlements_suzerainNum[settlementNum] == -1
-                ? settlementNum
-                : this._settlements_suzerainNum[settlementNum];
-                break;
-            }
-        }
-        return res;
-    }
-
-    private _TeamChangeSuzerain (teamNum: number, suzerainNum: number) {
-        var teamSettlements = this._TeamGetSettlements(teamNum);
-
-        for (var settlementNum of teamSettlements) {
-            if (suzerainNum == settlementNum) {
-                this._settlements_suzerainNum[settlementNum] = -1;
-            } else {
-                this._settlements_suzerainNum[settlementNum] = suzerainNum;
-            }
+    private subscribeToEvents(): void {
+        for (const participant of Array.from(this.participants.values())) {
+            participant.settlement.Units.UnitCauseDamage.connect(this.onUnitCauseDamage.bind(this));
         }
     }
 
-    private _TeamAddVassal(teamNum: number, settlementNum: number, silent: boolean = false) {
-        var enemyTeamNum                              = this._TeamGetEnemyTeamNum(teamNum);
-        var suzerainNum                               = this._TeamGetSuzerainNum(teamNum);
-        var prevSuzerainNum                           = this._settlements_suzerainNum[teamNum];
+    // ... (остальной код без изменений)
+    private onUnitCauseDamage(sender: any, args: any): void {
+        const attackerOwnerUid = args.TriggeredUnit.Owner.Uid;
+        const victimOwnerUid = args.VictimUnit.Owner.Uid;
 
-        // обновляем командю и сюзерена
+        const attackerId = this.settlementUidToParticipantId.get(attackerOwnerUid);
+        const victimId = this.settlementUidToParticipantId.get(victimOwnerUid);
 
-        this._settlements_suzerainNum[settlementNum]  = suzerainNum;
-        this._settlements_teamNum[settlementNum]      = this._settlements_teamNum[suzerainNum];
+        if (attackerId === undefined || victimId === undefined || attackerId === victimId) return;
 
-        // обновляем дипломатию
+        const attacker = this.participants.get(attackerId);
+        const victim = this.participants.get(victimId);
+        if (!attacker || !victim) return;
 
-        for (var otherSettlementNum = 0; otherSettlementNum < this._settlements.length; otherSettlementNum++) {
-            if (this._settlements_teamNum[otherSettlementNum] == teamNum) {
-                if (!silent) this.log.info("союз между ", settlementNum, " и ", otherSettlementNum);
-                this._settlements[settlementNum].Diplomacy.DeclareAlliance(this._settlements[otherSettlementNum]);
-                this._settlements[otherSettlementNum].Diplomacy.DeclareAlliance(this._settlements[settlementNum]);
-                this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] = DiplomacyStatus.Alliance;
-                this._settlements_settlements_diplomacyStatus[otherSettlementNum][settlementNum] = DiplomacyStatus.Alliance;
-            } else if (!this._settlements_isDefeat[prevSuzerainNum] && this._settlements_teamNum[otherSettlementNum] == enemyTeamNum) {
-                if (!silent) this.log.info("война между ", settlementNum, " и ", otherSettlementNum);
-                this._settlements[settlementNum].Diplomacy.DeclareWar(this._settlements[otherSettlementNum]);
-                this._settlements[otherSettlementNum].Diplomacy.DeclareWar(this._settlements[settlementNum]);
-                this._settlements_settlements_diplomacyStatus[settlementNum][otherSettlementNum] = DiplomacyStatus.War;
-                this._settlements_settlements_diplomacyStatus[otherSettlementNum][settlementNum] = DiplomacyStatus.War;
+        const diplomacy = attacker.settlement.Diplomacy.GetDiplomacyStatus(victim.settlement);
+
+        if (diplomacy === DiplomacyStatus.War) {
+            this.increaseAttackerPower(attacker, victim, args);
+        } else if (diplomacy === DiplomacyStatus.Neutral) {
+            if (args.VictimUnit.Health < args.VictimUnit.Cfg.MaxHealth) {
+                 args.VictimUnit.Health += Math.min(args.VictimUnit.Cfg.MaxHealth - args.VictimUnit.Health, args.Damage);
             }
         }
+    }
 
-        if (!silent) this.log.debug(this._settlements_name[settlementNum], "(", settlementNum, ") стал вассалом команды ", teamNum, " isDef = ", this._settlements_isDefeat[settlementNum]);
+    private increaseAttackerPower(attacker: FfaParticipant, victim: FfaParticipant, damageArgs: any): void {
+        let powerPointPerHp = this.unitCfgUidToPowerPerHp.get(damageArgs.VictimUnit.Cfg.Uid);
+        if (powerPointPerHp === undefined) {
+            const cfg = damageArgs.VictimUnit.Cfg;
+            powerPointPerHp = 0.01 * (cfg.CostResources.Gold + cfg.CostResources.Metal + cfg.CostResources.Lumber + 50 * cfg.CostResources.People) / cfg.MaxHealth;
+            this.unitCfgUidToPowerPerHp.set(cfg.Uid, powerPointPerHp);
+        }
 
-        if (!this._settlements_isDefeat[settlementNum]) {
+        const distanceFactor = Math.log(Math.max(1, chebyshevDistance(
+            attacker.castle.Cell.X, attacker.castle.Cell.Y,
+            damageArgs.TriggeredUnit.Cell.X, damageArgs.TriggeredUnit.Cell.Y
+        )));
+        
+        let deltaPoints = damageArgs.Damage * powerPointPerHp * distanceFactor;
+
+        if (this.bountyParticipant && victim.id === this.bountyParticipant.id) {
+            deltaPoints *= this.settings.bountyPowerPointsMultiplier;
+        }
+
+        attacker.powerPoints += deltaPoints;
+        attacker.damageDealtTo.set(victim.id, (attacker.damageDealtTo.get(victim.id) || 0) + deltaPoints);
+    }
+
+    private checkForBounty(gameTickNum: number): void {
+        if (!this.settings.enableBountyOnPoorest || gameTickNum < this.nextBountyCheckTick) {
             return;
         }
 
-        // выбираем место спавна замка
+        this.nextBountyCheckTick = gameTickNum + this.settings.bountyCheckIntervalTicks;
 
-        let sumCount  = 0;
-        let sumValueX = 0;
-        let sumValueY = 0;
+        let poorestParticipant: FfaParticipant | null = null;
+        let minPower = Infinity;
 
-        let enumerator = this._settlements[settlementNum].Units.GetEnumerator();
-        while(enumerator.MoveNext()) {
-            if (enumerator.Current && enumerator.Current.Cfg.IsBuilding) {
-                sumValueX += enumerator.Current.Cell.X;
-                sumValueY += enumerator.Current.Cell.Y;
-                sumCount  ++;   
-            }
-        }
-        enumerator.Dispose();
-
-        var spawnPosition : Point2D;
-        if (sumCount == 0) {
-            var castlesPositions = new Array<Point2D>();
-
-            enumerator = this._settlements[suzerainNum].Units.GetEnumerator();
-            while(enumerator.MoveNext()) {
-                if (enumerator.Current && enumerator.Current.Cfg.HasMainBuildingSpecification) {
-                    castlesPositions.push(enumerator.Current.Cell);
-                }
-            }
-            enumerator.Dispose();
-
-            let rnd       = ActiveScena.GetRealScena().Context.Randomizer;
-            var number    = rnd.RandomNumber(0, castlesPositions.length - 1);
-            spawnPosition = castlesPositions[number];
-        } else {
-            spawnPosition = createPoint(Math.round(sumValueX / sumCount - 2), Math.round(sumValueY / sumCount - 1));
-        }
-
-        // спавним замок в spawnPosition так, чтобы в 1 клетке от замка ничего не было
-
-        var generator                 = generateCellInSpiral(spawnPosition.X, spawnPosition.Y);
-        let spawnParams               = new SpawnUnitParameters();
-        spawnParams.ProductUnitConfig = this._settlements_castleCfg[settlementNum];
-        spawnParams.Direction         = UnitDirection.RightDown;
-        for (let position = generator.next(); !position.done; position = generator.next()) {
-            if (unitCanBePlacedByRealMap(this._settlements_castleCfg[settlementNum], position.value.X + 1, position.value.Y + 1) &&
-                unitCanBePlacedByRealMap(this._settlements_castleCfg[settlementNum], position.value.X, position.value.Y) &&
-                unitCanBePlacedByRealMap(this._settlements_castleCfg[settlementNum], position.value.X - 1, position.value.Y - 1)) {
-                spawnParams.Cell = createPoint(position.value.X, position.value.Y);
-                var castle = this._settlements[settlementNum].Units.SpawnUnit(spawnParams);
-
-                if (castle) {
-                    if (!silent) {
-                        this.log.debug("\tему был дарован замок в позиции: ", position.value.X, ",", position.value.Y, " замок = ", castle);
-                        var msg = createGameMessageWithSound("Ваш сюзерен " + this._settlements_name[suzerainNum] + " привествует тебя в своих рядах. Вам был дарован замок в позиции "
-                            + position.value.X + ", " + position.value.Y, createHordeColor(255, 150, 150, 150));
-                        this._settlements[settlementNum].Messages.AddMessage(msg);
-                    }
-                    this._SettlementSetCastle(settlementNum, castle);
-                    break;
-                }
+        for (const team of Array.from(this.teams.values())) {
+            const suzerain = team.suzerain;
+            if (suzerain.powerPoints < minPower) {
+                minPower = suzerain.powerPoints;
+                poorestParticipant = suzerain;
             }
         }
 
-        // передаем ресурсы сверх пределов (и даже популяцию)
-
-        var vassal_limitResources = Math.floor(this._vassal_limitResources + this._powerPoints_rewardPercentage * this._settlements_powerPoints[settlementNum]);
-        var vassal_limitPeople    = Math.floor(this._vassal_limitPeople + 0.02 * this._powerPoints_rewardPercentage * this._settlements_powerPoints[settlementNum]);
-
-        var tribute = createResourcesAmount(
-            Math.max(0, this._settlements[settlementNum].Resources.Gold - vassal_limitResources),
-            Math.max(0, this._settlements[settlementNum].Resources.Metal - vassal_limitResources),
-            Math.max(0, this._settlements[settlementNum].Resources.Lumber - vassal_limitResources),
-            Math.max(0, this._settlements[settlementNum].Resources.FreePeople - vassal_limitPeople)
-        );
-        if (tribute.Gold != 0 || tribute.Metal != 0 || tribute.Lumber != 0 || tribute.People != 0) {
-            this._settlements[settlementNum].Resources.TakeResources(tribute);
-            this._settlements[suzerainNum].Resources.AddResources(tribute);
-        }
-        
-        // снимаем флаг поражения
-
-        this._settlements_isDefeat[settlementNum] = false;
-    }
-
-    private _TeamAddSuzerain(teamNum: number, settlementNum: number, silent: boolean = false) {
-        var loserTeamNum      = this._settlements_teamNum[settlementNum];
-        var winnerSuzerainNum = this._TeamGetSuzerainNum(teamNum);
-        var loserVassals      = this._TeamGetSettlements(loserTeamNum);
-
-        // подготовка данных чтобы союзы не сломались
-
-        for (var otherSettlementNum of loserVassals) {
-            this._settlements_teamNum[otherSettlementNum]     = teamNum;
-            this._settlements_suzerainNum[otherSettlementNum] = winnerSuzerainNum;
-        }
-
-        // добавляем вассалов
-        for (var otherSettlementNum of loserVassals) {
-            if (!silent) this.log.info("Его вассал ", otherSettlementNum, " проиграл, он переходит из ", this._settlements_teamNum[otherSettlementNum], " в ", teamNum);
-            this._TeamAddVassal(teamNum, otherSettlementNum, silent);
+        if (poorestParticipant && poorestParticipant !== this.bountyParticipant) {
+            this.bountyParticipant = poorestParticipant;
+            const message = `Бог битвы недоволен слабостью ${poorestParticipant.name}! Награда за его голову удвоена!`;
+            broadcastMessage(message, createHordeColor(255, 255, 100, 100));
         }
     }
 
-    private _TeamGetSettlements(teamNum: number) {
-        var res = new Array<number>();
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_teamNum[settlementNum] != teamNum) {
+    private processVassalTributes(): void {
+        for (const team of Array.from(this.teams.values())) {
+            for (const vassal of team.vassals) {
+                vassal.payTribute();
+            }
+        }
+    }
+
+    private processSuzerainGenerosity(): void {
+        for (const team of Array.from(this.teams.values())) {
+            team.distributeGenerosity();
+        }
+    }
+
+    private promoteNewSuzerains(): void {
+        for (const team of Array.from(this.teams.values())) {
+            team.promoteNewSuzerainIfNeeded();
+        }
+    }
+
+    private checkForDefeatedParticipants(): void {
+        for (const participant of Array.from(this.participants.values())) {
+            if (!participant.isDefeated && participant.castle.IsDead) {
+                participant.isDefeated = true;
+            }
+        }
+    }
+
+    private processTeamMigrations(gameTickNum: number): void {
+        const defeatedParticipants = Array.from(this.participants.values()).filter(p => p.isDefeated);
+
+        for (const defeated of defeatedParticipants) {
+            const loserTeam = this.teams.get(defeated.teamId);
+            if (!loserTeam) continue;
+
+            const winner = this.findWinnerFor(defeated);
+
+            if (!winner) {
+                this.log.warning(`Не удалось определить победителя для побежденного участника ${defeated.name}.`);
+                defeated.respawnCastle();
+                defeated.isDefeated = false;
                 continue;
             }
-            res.push(settlementNum);
+
+            const winnerTeam = this.teams.get(winner.teamId);
+            if (!winnerTeam) continue;
+
+            this.log.info(`Участник ${defeated.name} (${defeated.id}) был побежден ${winner.name} и перейдет из команды ${loserTeam.id} в команду ${winnerTeam.id}.`);
+
+            const allLosers = loserTeam.getMembers();
+            for (const member of allLosers) {
+                const takenPercentage = member.isSuzerain() ? this.settings.powerPointsRewardPercentage : this.settings.powerPointsRewardPercentage / 2;
+                winnerTeam.shareSpoils(member, takenPercentage);
+            }
+
+            winnerTeam.addSuzerainAndVassals(defeated, loserTeam.vassals);
+            this.teams.delete(loserTeam.id);
+
+            this.startTemporaryPeace(winnerTeam, gameTickNum);
+
+            broadcastMessage(`${winner.name} победил ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
+            broadcastMessage(`Команда ${winnerTeam.suzerain.name} получает временный мир на ${this.settings.temporaryPeaceDurationTicks / 50 / 60} мин для восстановления.`, winnerTeam.suzerain.settlement.SettlementColor);
+
+            allLosers.forEach(member => member.isDefeated = false);
         }
-        return res;
     }
 
-    private _TeamGetPower(teamNum: number) : number {
-        var teamSettlements = this._TeamGetSettlements(teamNum);
-        var power : number  = 0;
+    private findWinnerFor(defeated: FfaParticipant): FfaParticipant | null {
+        let maxDamage = 0;
+        let winner: FfaParticipant | null = null;
 
-        for (var settlementNum of teamSettlements) {
-            power += this._SettlementGetPower(settlementNum);
-        }
+        for (const participant of Array.from(this.participants.values())) {
+            if (participant.teamId === defeated.teamId) continue;
 
-        return power;
-    }
-
-    private _SettlementGetPower(settlementNum: number) : number {
-        var power = this._settlements[settlementNum].Resources.Gold + this._settlements[settlementNum].Resources.Metal + this._settlements[settlementNum].Resources.Lumber + 50*this._settlements[settlementNum].Resources.FreePeople;
-
-        let enumerator = this._settlements[settlementNum].Units.GetEnumerator();
-        while(enumerator.Current && enumerator.MoveNext()) {
-            power += enumerator.Current.Cfg.CostResources.Gold + enumerator.Current.Cfg.CostResources.Metal + enumerator.Current.Cfg.CostResources.Lumber + 50*enumerator.Current.Cfg.CostResources.People;
-        }
-        enumerator.Dispose();
-
-        return power;
-    }
-
-    private _CreateCastleFrameBuffer(settlementNum: number) {
-        // Объект для низкоуровневого формирования геометрии
-        let geometryCanvas = new GeometryCanvas();
-        
-        const width  = this._settlements_castleCfg[settlementNum].Size.Width * 32;
-        const height = this._settlements_castleCfg[settlementNum].Size.Height * 32;
-
-        var points = host.newArr(Stride_Vector2, 5) as Stride_Vector2[];
-        points[0] = new Stride_Vector2(Math.round(-0.7*width),  Math.round(-0.7*height));
-        points[1] = new Stride_Vector2(Math.round( 0.7*width),  Math.round(-0.7*height));
-        points[2] = new Stride_Vector2(Math.round( 0.7*width),  Math.round( 0.7*height));
-        points[3] = new Stride_Vector2(Math.round(-0.7*width),  Math.round( 0.7*height));
-        points[4] = new Stride_Vector2(Math.round(-0.7*width),  Math.round(-0.7*height));
-
-        geometryCanvas.DrawPolyLine(points, new Stride_Color(this._settlements[settlementNum].SettlementColor.R, this._settlements[settlementNum].SettlementColor.G, this._settlements[settlementNum].SettlementColor.B), 3.0, false);
-
-        return geometryCanvas.GetBuffers();
-    }
-
-    private _SettlementSetCastle(settlementNum: number, castleUnit: any) {
-        this._settlements_castle[settlementNum] = castleUnit;
-
-        // запрещаем самоуничтожение
-        var commandsMind       = castleUnit.CommandsMind;
-        var disallowedCommands = ScriptUtils.GetValue(commandsMind, "DisallowedCommands");
-        if (!disallowedCommands.ContainsKey(UnitCommand.DestroySelf)) {
-            disallowedCommands.Add(UnitCommand.DestroySelf, 1);
-        }
-
-        // двигаем рамку
-        this._settlements_castleFrame[settlementNum].Position = castleUnit.Position;
-
-        // двигаем очки власти
-        this._settlements_powerPointStrDecorators[settlementNum].Position = createPoint(32*(castleUnit.Cell.X - 1), Math.floor(32*(castleUnit.Cell.Y - 1.3)));
-        
-        // двигаем статус игрока
-        this._settlements_statusStrDecorators[settlementNum].Position = createPoint(Math.floor(32*(castleUnit.Cell.X + 2.7)), Math.floor(32*(castleUnit.Cell.Y + 3.6)));
-    }
-
-    private _TeamShareSettlementPowerPoints(teamNum: number, targetSettlementNum: number) {
-        var distributedPowerPoints = this._settlements_powerPoints[targetSettlementNum] *
-            (this._settlements_suzerainNum[targetSettlementNum] == -1
-             ? this._suzerain_powerPoints_takenPercentage
-             : this._vassal_powerPoints_takenPercentage);
-        this._settlements_powerPoints[targetSettlementNum] -= distributedPowerPoints;
-
-        var fullIntegral : number = 0.0;
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_teamNum[settlementNum] == teamNum) {
-                fullIntegral += Math.max(1, this._settlements_settlements_powerPoints[settlementNum][targetSettlementNum]);
+            const damage = participant.damageDealtTo.get(defeated.id) || 0;
+            if (damage > maxDamage) {
+                maxDamage = damage;
+                winner = participant;
             }
         }
-        log.info("loserVassalNum ", targetSettlementNum, " всего очков ", this._settlements_powerPoints[targetSettlementNum] + distributedPowerPoints, " отнято очков distribtedPowerPoints ", distributedPowerPoints, " его враги заработали суммарно очков власти ", fullIntegral);
-        for (var settlementNum = 0; settlementNum < this._settlements.length; settlementNum++) {
-            if (this._settlements_teamNum[settlementNum] == teamNum) {
-                const partPowerPoints  = Math.max(1, this._settlements_settlements_powerPoints[settlementNum][targetSettlementNum]) / fullIntegral;
-                const deltaPowerPoints = distributedPowerPoints * partPowerPoints;
-                this._settlements_powerPoints[settlementNum] += deltaPowerPoints;
-                log.info("\twinnerSettlementNum ", settlementNum, " получает долю ", partPowerPoints, " равную ", deltaPowerPoints);
-                var msg = createGameMessageWithSound("За победу над " + this._settlements_name[targetSettlementNum]
-                    + " вам начислено очков власти: "+ Math.round(deltaPowerPoints)
-                    + " (" + Math.round(partPowerPoints * 100) + "%)",
-                    createHordeColor(255, 150, 150, 150));
-                this._settlements[settlementNum].Messages.AddMessage(msg);
+        return winner;
+    }
 
-                this._settlements_settlements_powerPoints[settlementNum][targetSettlementNum] = 0;
-                this._settlements_settlements_powerPoints[targetSettlementNum][settlementNum] = 0;
+    private startTemporaryPeace(team: Team, gameTickNum: number): void {
+        const allTeams = Array.from(this.teams.values());
+        team.setPeaceStatusWithAll(allTeams);
+        team.peaceUntilTick = gameTickNum + this.settings.temporaryPeaceDurationTicks;
+    }
+
+    private managePeaceTreaties(gameTickNum: number): void {
+        const allTeams = Array.from(this.teams.values());
+        for (const team of allTeams) {
+            if (team.peaceUntilTick > 0 && gameTickNum > team.peaceUntilTick) {
+                this.log.info(`Мирный договор для команды ${team.id} истек. Объявляется война всем.`);
+                team.peaceUntilTick = 0;
+
+                const dominantTeam = this.findDominantTeam();
+                if (this.settings.enableCoalitionsAgainstLeader && dominantTeam && dominantTeam.id !== team.id) {
+                    const coalition = allTeams.filter(t => t.id !== dominantTeam.id);
+                    team.setWarStatusWithAll([dominantTeam]);
+                    team.setPeaceStatusWithAll(coalition);
+                } else {
+                    team.setWarStatusWithAll(allTeams);
+                }
+
+                broadcastMessage(`Мирный договор для команды ${team.suzerain.name} закончился! Они снова в бою!`, team.suzerain.settlement.SettlementColor);
             }
+        }
+    }
+
+    private findDominantTeam(): Team | null {
+        const totalPlayers = this.participants.size;
+        for (const team of Array.from(this.teams.values())) {
+            if (team.getMemberCount() > totalPlayers / 2) {
+                return team;
+            }
+        }
+        return null;
+    }
+
+    private processPowerPointRewards(gameTickNum: number): void {
+        for (const participant of Array.from(this.participants.values())) {
+            if (gameTickNum >= participant.nextRewardTime) {
+                participant.givePowerPointReward();
+            }
+        }
+    }
+
+    private checkForGameEnd(): void {
+        if (this.teams.size === 1) {
+            this.isGameFinished = true;
+            const winnerTeam = this.teams.values().next().value as Team;
+            const winnerName = winnerTeam.suzerain.name;
+
+            broadcastMessage(`Единственным правителем этих земель теперь является ${winnerName}!`, winnerTeam.suzerain.settlement.SettlementColor);
+
+            for (const p of Array.from(this.participants.values())) {
+                if (p.teamId === winnerTeam.id) {
+                    p.settlement.Existence.ForceVictory();
+                } else {
+                    p.settlement.Existence.ForceTotalDefeat();
+                }
+            }
+        }
+    }
+
+    private updateDecorators(): void {
+        for (const participant of Array.from(this.participants.values())) {
+            const castle = participant.castle;
+            if (!castle || castle.IsDead) continue;
+
+            this.updatePowerPointsDecorator(participant);
+            this.updateStatusDecorator(participant);
+            this.updateCastleFrame(participant);
+        }
+    }
+
+    private updatePowerPointsDecorator(participant: FfaParticipant): void {
+        const decorator = this.powerPointDecorators.get(participant.id);
+        if (decorator) {
+            decorator.Text = `Сила: ${Math.round(participant.powerPoints)}`;
+            decorator.Position = createPoint(32 * (participant.castle.Cell.X - 1), Math.floor(32 * (participant.castle.Cell.Y - 1.3)));
+        }
+    }
+
+    private updateStatusDecorator(participant: FfaParticipant): void {
+        const decorator = this.statusDecorators.get(participant.id);
+        if (decorator) {
+            let statusText = participant.isSuzerain() ? "Сюзерен" : "Вассал";
+            if (this.bountyParticipant && participant.id === this.bountyParticipant.id) {
+                statusText += " (награда за голову!)";
+            }
+            decorator.Text = statusText;
+            decorator.Position = createPoint(Math.floor(32 * (participant.castle.Cell.X + 2.7)), Math.floor(32 * (participant.castle.Cell.Y + 3.6)));
+        }
+    }
+
+    private updateCastleFrame(participant: FfaParticipant): void {
+        const frame = this.castleFrames.get(participant.id);
+        if (frame) {
+            frame.Position = participant.castle.Position;
+        }
+    }
+
+    private createDecoratorsForParticipant(participant: FfaParticipant): void {
+        const settlementColor = participant.settlement.SettlementColor;
+        const textColor = createHordeColor(255, Math.min(255, settlementColor.R + 128), Math.min(255, settlementColor.G + 128), Math.min(255, settlementColor.B + 128));
+
+        const ppDecorator = spawnString(ActiveScena, `Сила: ${Math.round(participant.powerPoints)}`, createPoint(0, 0), 10 * 60 * 60 * 50);
+        ppDecorator.Height = 22;
+        ppDecorator.Color = textColor;
+        ppDecorator.DrawLayer = DrawLayer.Birds;
+        //@ts-ignore
+        ppDecorator.Font = FontUtils.DefaultVectorFont;
+        this.powerPointDecorators.set(participant.id, ppDecorator);
+
+        const statusDecorator = spawnString(ActiveScena, participant.isSuzerain() ? "Сюзерен" : "Вассал", createPoint(0, 0), 10 * 60 * 60 * 50);
+        statusDecorator.Height = 22;
+        statusDecorator.Color = textColor;
+        statusDecorator.DrawLayer = DrawLayer.Birds;
+        //@ts-ignore
+        statusDecorator.Font = FontUtils.DefaultVectorFont;
+        this.statusDecorators.set(participant.id, statusDecorator);
+
+        const frame = this.createCastleFrame(participant);
+        this.castleFrames.set(participant.id, frame);
+    }
+
+    private createCastleFrame(participant: FfaParticipant): GeometryVisualEffect {
+        const geometryCanvas = new GeometryCanvas();
+        const width = participant.castleConfig.Size.Width * 32;
+        const height = participant.castleConfig.Size.Height * 32;
+
+        const points = host.newArr(Stride_Vector2, 5) as Stride_Vector2[];
+        points[0] = new Stride_Vector2(Math.round(-0.7 * width), Math.round(-0.7 * height));
+        points[1] = new Stride_Vector2(Math.round(0.7 * width), Math.round(-0.7 * height));
+        points[2] = new Stride_Vector2(Math.round(0.7 * width), Math.round(0.7 * height));
+        points[3] = new Stride_Vector2(Math.round(-0.7 * width), Math.round(0.7 * height));
+        points[4] = points[0];
+
+        const color = participant.settlement.SettlementColor;
+        geometryCanvas.DrawPolyLine(points, new Stride_Color(color.R, color.G, color.B), 3.0, false);
+
+        return spawnGeometry(ActiveScena, geometryCanvas.GetBuffers(), participant.castle.Position, 10 * 60 * 60 * 50);
+    }
+
+    private displayInitialMessages(gameTickNum: number): void {
+        const color = createHordeColor(255, 255, 140, 140);
+        let message = "";
+
+        if (gameTickNum === 50 * 10) {
+            message = "Правила игры:\n\n" +
+                      "\t1. Все игроки находятся в состоянии войны (Каждый сам за себя).\n" +
+                      "\t2. Уничтожьте вражеский замок, чтобы сделать его своим вассалом.";
+        } else if (gameTickNum === 50 * 30) {
+            message = `\t3. Вся проигравшая команда (сюзерен и вассалы) переходит под контроль победителя.\n` +
+                      `\t4. Вассалы платят дань (ресурсы > ${this.settings.vassalResourceLimit} + 10% от очков силы) своему сюзерену.\n` +
+                      `\t5. У вассалов есть лимит населения (${this.settings.vassalPopulationLimit} + 0.2% от очков силы).\n`;
+        } else if (gameTickNum === 50 * 50) {
+            message = `\t6. После победы ваша команда получает временный мирный договор на ${this.settings.temporaryPeaceDurationTicks / 50 / 60} мин.\n` +
+                      `\t7. Когда договор истекает, вы снова в состоянии войны со всеми.\n` +
+                      `\t8. Сюзерен проявляет щедрость (делится ресурсами), если его казна превышает ${this.settings.suzerainGenerosityThreshold}.\n`;
+        } else if (gameTickNum === 50 * 70) {
+            message = `\t9. Самый влиятельный игрок в команде (по очкам силы) становится сюзереном.\n` +
+                      `\t10. После уплаты налогов и зарплат вы получаете ресурсы в размере ${Math.round(this.settings.powerPointsRewardPercentage * 100)}% от ваших очков силы.\n` +
+                      `\t11. Нейтральным юнитам урон не наносится.\n`;
+        } else if (gameTickNum === 50 * 90) {
+            message = "Правила объявлены. Да начнется битва!";
+        }
+
+        if (message) {
+            broadcastMessage(message, color);
         }
     }
 }
