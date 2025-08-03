@@ -17,7 +17,10 @@ export class AutoFFASettings {
     public enableCoalitionsAgainstLeader: boolean = true;
 
     /** Коэффициент набора очков силы */
-    public powerPointPerHpCoeff: number = 0.03; 
+    public powerPointPerHpCoeff: number = 0.015; 
+
+    /** Коэффициент набора очков силы при максимальном удалении */
+    public powerPointCoeffByMaxDistance: number = 3;
 
     // ===============================================================
     // ===                   НАЧАЛО ИГРЫ                           ===

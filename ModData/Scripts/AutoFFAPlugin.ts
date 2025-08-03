@@ -273,8 +273,10 @@ export class AutoFfaPlugin extends HordePluginBase {
             damageArgs.TriggeredUnit.Cell.X, damageArgs.TriggeredUnit.Cell.Y
         );
 
-        // Множитель за расстояние, линейно от 1 (вблизи замка) до 3 (на краю карты).
-        const distanceFactor = Math.min(1 + 2 * (distance / this.mapLinearSize), 3);
+        // Множитель за расстояние, линейно от 1 (вблизи замка) до 2 (на краю карты).
+        const distanceFactor = Math.min(
+            1 + (this.settings.powerPointCoeffByMaxDistance - 1) * (distance / this.mapLinearSize),
+            this.settings.powerPointCoeffByMaxDistance);
         
         let deltaPoints = damageArgs.Damage * powerPointPerHp * distanceFactor;
 
