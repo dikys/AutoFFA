@@ -23,9 +23,12 @@ export class FfaParticipant {
 
     public teamId: number;
     public suzerain: FfaParticipant | null = null;
+    public target: FfaParticipant | null = null;
     public isDefeated: boolean = false;
     public powerPoints: number = 0; // Начальное значение устанавливается из настроек
     public damageDealtTo: Map<number, number> = new Map();
+    public lastPowerPointGainTick: number = 0;
+    public currentBattlePowerPoints: number = 0;
     public nextRewardTime: number;
 
     // ==================================================================================================

@@ -1,9 +1,9 @@
 import { AutoFFASettings } from "./AutoFFASettings";
 import HordePluginBase from "plugins/base-plugin";
 import { log, LogLevel } from "library/common/logging";
-import { broadcastMessage } from "library/common/messages";
+import { broadcastMessage, createGameMessageWithSound } from "library/common/messages";
 import { createHordeColor, createPoint } from "library/common/primitives";
-import { DiplomacyStatus, DrawLayer, FontUtils, GeometryCanvas, GeometryVisualEffect, Stride_Color, Stride_Vector2, StringVisualEffect } from "library/game-logic/horde-types";
+import { BattleController, DiplomacyStatus, DrawLayer, FontUtils, GeometryCanvas, GeometryVisualEffect, Stride_Color, Stride_Vector2, StringVisualEffect } from "library/game-logic/horde-types";
 import { isReplayMode } from "library/game-logic/game-tools";
 import { spawnGeometry, spawnString } from "library/game-logic/decoration-spawn";
 import { FfaParticipant } from "./FfaParticipant";
@@ -36,6 +36,8 @@ export class AutoFfaPlugin extends HordePluginBase {
         REWARDS: 77,
         DEFEATS: 88,
         BOUNTY_CHECK: 95,
+        TARGET_CHECK: 96,
+        BATTLE_SUMMARY_CHECK: 98,
         GAME_END_CHECK: 99,
         COALITION_CHECK: 97,
     };
@@ -51,6 +53,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
     private powerPointDecorators: Map<number, StringVisualEffect> = new Map();
     private statusDecorators: Map<number, StringVisualEffect> = new Map();
+    private targetDecorators: Map<number, StringVisualEffect> = new Map();
     private castleFrames: Map<number, GeometryVisualEffect> = new Map();
 
     private isGameFinished = false;
@@ -104,7 +107,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             case this.TICK_OFFSET.PROMOTIONS: this.promoteNewSuzerains(); break;
             case this.TICK_OFFSET.REWARDS: this.processPowerPointRewards(gameTickNum); break;
             case this.TICK_OFFSET.DEFEATS: this.checkForDefeatedParticipants(); break;
+            case this.TICK_OFFSET.TARGET_CHECK: this.checkAndReassignTargets(); break;
             case this.TICK_OFFSET.BOUNTY_CHECK: this.checkForBounty(gameTickNum); break;
+            case this.TICK_OFFSET.BATTLE_SUMMARY_CHECK: this.checkBattleSummaries(gameTickNum); break;
             case this.TICK_OFFSET.GAME_END_CHECK: this.checkForGameEnd(); break;
             case this.TICK_OFFSET.COALITION_CHECK: this.manageCoalitions(); break;
         }
@@ -119,7 +124,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
         var scenaWidth  = ActiveScena.GetRealScena().Size.Width;
         var scenaHeight = ActiveScena.GetRealScena().Size.Height;
-        this.mapLinearSize = Math.sqrt(scenaWidth * scenaHeight);
+        this.mapLinearSize = Math.sqrt(2)*Math.sqrt(scenaWidth * scenaHeight);
         if (this.mapLinearSize <= 1) {
             this.log.warning(`Не удалось определить размер карты (${this.mapLinearSize}), множитель за расстояние может работать некорректно. Установлено значение по умолчанию 256.`);
             this.mapLinearSize = 100; // Fallback
@@ -127,6 +132,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
         this.setupParticipantsAndTeams();
         this.setInitialDiplomacy();
+        this.checkAndReassignTargets(); // Назначим начальные цели
         this.subscribeToEvents();
         this.updateDecorators();
 
@@ -143,16 +149,24 @@ export class AutoFfaPlugin extends HordePluginBase {
 
     private setupParticipantsAndTeams(): void {
         const sceneSettlements = ActiveScena.GetRealScena().Settlements;
-        const playerSettlementUids = new Set<string>();
+        const settlementUidToPlayerNames = new Map<string, string[]>();
 
+        // Собираем имена всех игроков для каждого поселения
         for (const player of Players) {
             const realPlayer = player.GetRealPlayer();
             if (isReplayMode() && !realPlayer.IsReplay) continue;
-            playerSettlementUids.add(realPlayer.GetRealSettlement().Uid);
+            
+            const settlementUid = realPlayer.GetRealSettlement().Uid;
+            const nickname = realPlayer.Nickname;
+
+            if (!settlementUidToPlayerNames.has(settlementUid)) {
+                settlementUidToPlayerNames.set(settlementUid, []);
+            }
+            settlementUidToPlayerNames.get(settlementUid)!.push(nickname);
         }
 
         let participantIdCounter = 0;
-        for (const uid of Array.from(playerSettlementUids).sort()) {
+        for (const uid of Array.from(settlementUidToPlayerNames.keys()).sort()) {
             const settlement = sceneSettlements.Item.get(uid);
             const castle = settlement.Units.GetCastleOrAnyUnit();
 
@@ -161,7 +175,9 @@ export class AutoFfaPlugin extends HordePluginBase {
                 continue;
             }
 
-            const name = settlement.LeaderName;
+            // Объединяем имена игроков, если их несколько, или используем имя лидера по умолчанию
+            const playerNames = settlementUidToPlayerNames.get(uid);
+            const name = (playerNames && playerNames.length > 0) ? playerNames.join(' & ') : settlement.LeaderName;
             const participant = new FfaParticipant(participantIdCounter, settlement, name, castle, this.settings);
             participant.powerPoints = this.settings.initialPowerPoints;
             
@@ -233,7 +249,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         const victim = this.participants.get(victimId);
         if (!attacker || !victim) return;
 
-        const diplomacy = attacker.settlement.Diplomacy.GetDiplomacyStatus(victim.settlement);
+        const diplomacy = DiplomacyManager.getDiplomacyStatus(attacker, victim);
 
         if (diplomacy === DiplomacyStatus.War) {
             this.increaseAttackerPower(attacker, victim, args);
@@ -266,8 +282,19 @@ export class AutoFfaPlugin extends HordePluginBase {
             deltaPoints *= this.settings.bountyPowerPointsMultiplier;
         }
 
-        attacker.powerPoints += deltaPoints;
-        attacker.damageDealtTo.set(victim.id, (attacker.damageDealtTo.get(victim.id) || 0) + deltaPoints);
+        if (this.settings.enableTargetSystem && attacker.target && victim.id === attacker.target.id) {
+            deltaPoints *= this.settings.targetPowerPointsMultiplier;
+        }
+
+        if (deltaPoints > 0) {
+            attacker.powerPoints += deltaPoints;
+            attacker.damageDealtTo.set(victim.id, (attacker.damageDealtTo.get(victim.id) || 0) + deltaPoints);
+
+            if (this.settings.enableBattleSummaryMessages) {
+                attacker.currentBattlePowerPoints += deltaPoints;
+                attacker.lastPowerPointGainTick = BattleController.GameTimer.GameFramesCounter;
+            }
+        }
     }
 
     private checkForBounty(gameTickNum: number): void {
@@ -292,6 +319,83 @@ export class AutoFfaPlugin extends HordePluginBase {
             this.bountyParticipant = poorestParticipant;
             const message = `Бог битвы недоволен слабостью ${poorestParticipant.name}! Награда за его голову удвоена!`;
             broadcastMessage(message, createHordeColor(255, 255, 100, 100));
+        }
+    }
+
+    private checkAndReassignTargets(): void {
+        if (!this.settings.enableTargetSystem) {
+            return;
+        }
+
+        const allParticipants = Array.from(this.participants.values());
+
+        for (const participant of allParticipants) {
+            const currentTarget = participant.target;
+
+            // Переназначаем цель, если ее нет, она побеждена или стала союзником
+            if (!currentTarget || currentTarget.isDefeated || currentTarget.teamId === participant.teamId) {
+                this.assignNewTargetFor(participant, allParticipants);
+            }
+        }
+    }
+
+    private assignNewTargetFor(participant: FfaParticipant, allParticipants: FfaParticipant[]): void {
+        const potentialTargets = allParticipants.filter(p =>
+            p.id !== participant.id &&
+            p.teamId !== participant.teamId &&
+            !p.isDefeated
+        );
+
+        const newTarget = potentialTargets.length > 0
+            ? potentialTargets[ActiveScena.GetRealScena().Context.Randomizer.RandomNumber(0, potentialTargets.length - 1)]
+            : null;
+
+        // Отправляем сообщения, только если цель действительно изменилась
+        if (participant.target?.id !== newTarget?.id) {
+            participant.target = newTarget;
+
+            if (newTarget) {
+                // Сообщение для атакующего
+                const msgForAttacker = createGameMessageWithSound(
+                    `Ваша новая цель: ${newTarget.name}!`,
+                    newTarget.settlement.SettlementColor
+                );
+                participant.settlement.Messages.AddMessage(msgForAttacker);
+
+                // Сообщение для цели
+                const msgForTarget = createGameMessageWithSound(
+                    `Вы стали целью для ${participant.name}!`,
+                    participant.settlement.SettlementColor
+                );
+                newTarget.settlement.Messages.AddMessage(msgForTarget);
+            }
+        }
+    }
+
+    private checkBattleSummaries(gameTickNum: number): void {
+        if (!this.settings.enableBattleSummaryMessages) {
+            return;
+        }
+
+        for (const participant of Array.from(this.participants.values())) {
+            // Проверяем, была ли начата битва и прошло ли достаточно времени с момента последнего получения очков
+            if (participant.lastPowerPointGainTick > 0 &&
+                gameTickNum > participant.lastPowerPointGainTick + this.settings.battleSummaryTimeoutTicks) {
+
+                const battlePoints = Math.round(participant.currentBattlePowerPoints);
+
+                if (battlePoints > 0) {
+                    const message = createGameMessageWithSound(
+                        `В результате последней битвы вы заработали ${battlePoints} очков силы.`,
+                        participant.settlement.SettlementColor
+                    );
+                    participant.settlement.Messages.AddMessage(message);
+                }
+
+                // Сбрасываем счетчики битвы
+                participant.currentBattlePowerPoints = 0;
+                participant.lastPowerPointGainTick = 0;
+            }
         }
     }
 
@@ -396,6 +500,11 @@ export class AutoFfaPlugin extends HordePluginBase {
             const peaceDurationMinutes = Math.round(this.settings.temporaryPeaceDurationTicks / 50 / 60);
             broadcastMessage(`Команда ${winnerTeam.suzerain.name} получает временный мир на ${peaceDurationMinutes} мин. для восстановления.`, winnerTeam.suzerain.settlement.SettlementColor);
         }
+
+        // Если произошли изменения в составах команд, нужно переназначить цели
+        if (defeatedParticipants.length > 0) {
+            this.checkAndReassignTargets();
+        }
     }
 
     private findWinnerFor(defeated: FfaParticipant): FfaParticipant | null {
@@ -475,6 +584,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             `Остальные игроки объединились в коалицию под предводительством ${coalitionLeaderTeam.suzerain.name}, чтобы дать отпор!`,
             coalitionLeaderTeam.suzerain.settlement.SettlementColor
         );
+
+        // После формирования коалиции, переназначаем цели
+        this.checkAndReassignTargets();
     }
 
     private findDominantTeam(): Team | null {
@@ -520,6 +632,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
             this.updatePowerPointsDecorator(participant);
             this.updateStatusDecorator(participant);
+            this.updateTargetDecorator(participant);
             this.updateCastleFrame(participant);
         }
     }
@@ -527,7 +640,9 @@ export class AutoFfaPlugin extends HordePluginBase {
     private updatePowerPointsDecorator(participant: FfaParticipant): void {
         const decorator = this.powerPointDecorators.get(participant.id);
         if (decorator) {
-            decorator.Text = `Сила: ${Math.round(participant.powerPoints)}`;
+            const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
+            const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
+            decorator.Text = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
             decorator.Position = createPoint(32 * (participant.castle.Cell.X - 1), Math.floor(32 * (participant.castle.Cell.Y - 1.3)));
         }
     }
@@ -544,6 +659,24 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
     }
 
+    private updateTargetDecorator(participant: FfaParticipant): void {
+        if (!this.settings.enableTargetSystem) {
+            return;
+        }
+        const decorator = this.targetDecorators.get(participant.id);
+        if (decorator) {
+            const target = participant.target;
+            if (target) {
+                decorator.Text = `Цель: ${target.name}`;
+                decorator.Color = target.settlement.SettlementColor;
+                // Позиция чуть ниже декоратора очков силы
+                decorator.Position = createPoint(Math.floor(32 * (participant.castle.Cell.X - 1)), Math.floor(32 * (participant.castle.Cell.Y - 1.8)));
+            } else {
+                decorator.Text = ""; // Скрываем, если цели нет
+            }
+        }
+    }
+
     private updateCastleFrame(participant: FfaParticipant): void {
         const frame = this.castleFrames.get(participant.id);
         if (frame) {
@@ -555,7 +688,10 @@ export class AutoFfaPlugin extends HordePluginBase {
         const settlementColor = participant.settlement.SettlementColor;
         const textColor = createHordeColor(255, Math.min(255, settlementColor.R + 128), Math.min(255, settlementColor.G + 128), Math.min(255, settlementColor.B + 128));
 
-        const ppDecorator = spawnString(ActiveScena, `Сила: ${Math.round(participant.powerPoints)}`, createPoint(0, 0), 10 * 60 * 60 * 50);
+        const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
+        const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
+        const ppText = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
+        const ppDecorator = spawnString(ActiveScena, ppText, createPoint(0, 0), 10 * 60 * 60 * 50);
         ppDecorator.Height = 22;
         ppDecorator.Color = textColor;
         ppDecorator.DrawLayer = DrawLayer.Birds;
@@ -570,6 +706,15 @@ export class AutoFfaPlugin extends HordePluginBase {
         //@ts-ignore
         statusDecorator.Font = FontUtils.DefaultVectorFont;
         this.statusDecorators.set(participant.id, statusDecorator);
+
+        if (this.settings.enableTargetSystem) {
+            const targetDecorator = spawnString(ActiveScena, "", createPoint(0, 0), 10 * 60 * 60 * 50);
+            targetDecorator.Height = 22;
+            targetDecorator.DrawLayer = DrawLayer.Birds;
+            //@ts-ignore
+            targetDecorator.Font = FontUtils.DefaultVectorFont;
+            this.targetDecorators.set(participant.id, targetDecorator);
+        }
 
         const frame = this.createCastleFrame(participant);
         this.castleFrames.set(participant.id, frame);
@@ -611,7 +756,7 @@ export class AutoFfaPlugin extends HordePluginBase {
                       `\t8. Сюзерен проявляет щедрость (делится ресурсами), если его казна превышает ${this.settings.suzerainGenerosityThreshold}.\n`;
         } else if (gameTickNum === 50 * 70) {
             message = `\t9. Самый влиятельный игрок в команде (по очкам силы) становится сюзереном.\n` +
-                      `\t10. После уплаты налогов и зарплат вы получаете ресурсы в размере ${Math.round(this.settings.powerPointsRewardPercentage * 100)}% от ваших очков силы.\n` +
+                      `\t10. После уплаты налогов и зарплат вы получаете ресурсы (${Math.round(this.settings.powerPointsRewardPercentage * 100)}% от очков силы) и людей (${(this.settings.powerPointsRewardPercentage * 0.02 * 100).toFixed(2)}% от очков силы).\n` +
                       `\t11. Нейтральным юнитам урон не наносится.\n`;
         } else if (gameTickNum === 50 * 90) {
             message = "Правила объявлены. Да начнется битва!";

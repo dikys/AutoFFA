@@ -24,7 +24,7 @@ export class AutoFFASettings {
     // ===============================================================
 
     /** Включить ли начальный мирный период, чтобы игроки могли развиться. */
-    public enableInitialPeacePeriod: boolean = true;
+    public enableInitialPeacePeriod: boolean = false;
 
     /** Длительность начального мирного периода в тиках (5 минут = 5 * 60 * 50 = 15000). */
     public initialPeaceDurationTicks: number = 15000;
@@ -38,13 +38,31 @@ export class AutoFFASettings {
      * Периодически самый бедный игрок будет становиться целью, атака на которую приносит больше очков.
      * Это заставляет помогать слабым или добивать их.
      */
-    public enableBountyOnPoorest: boolean = true;
+    public enableBountyOnPoorest: boolean = false;
 
     /** Как часто проверять и назначать новую "Награду за голову" в тиках (1 минута = 3000). */
     public bountyCheckIntervalTicks: number = 3000;
 
     /** Множитель очков влияния, получаемых при атаке игрока с "Наградой за голову". */
     public bountyPowerPointsMultiplier: number = 2;
+
+    /**
+     * Включить ли механику "Цель".
+     * Каждому игроку назначается случайная вражеская цель, атака которой приносит больше очков.
+     */
+    public enableTargetSystem: boolean = true;
+
+    /** Множитель очков влияния, получаемых при атаке назначенной цели. */
+    public targetPowerPointsMultiplier: number = 2;
+
+    /**
+     * Включить ли сообщения о результатах битвы.
+     * Если игрок не получает очки силы в течение некоторого времени, ему придет сообщение с итогом.
+     */
+    public enableBattleSummaryMessages: boolean = true;
+
+    /** Время в тиках, после которого битва считается оконченной, если не было получено новых очков силы (1 минута = 3000). */
+    public battleSummaryTimeoutTicks: number = 3000;
 
     // ===============================================================
     // ===                   ЭКОНОМИКА ВАССАЛОВ                      ===
