@@ -140,7 +140,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             this.initialPeaceEndTick = this.settings.initialPeaceDurationTicks;
         }
 
-        if (this.settings.enableBountyOnPoorest) {
+        if (this.settings.enableBountyOnLeader) {
             this.nextBountyCheckTick = this.initialPeaceEndTick + this.settings.bountyCheckIntervalTicks;
         }
 
@@ -300,26 +300,26 @@ export class AutoFfaPlugin extends HordePluginBase {
     }
 
     private checkForBounty(gameTickNum: number): void {
-        if (!this.settings.enableBountyOnPoorest || gameTickNum < this.nextBountyCheckTick) {
+        if (!this.settings.enableBountyOnLeader || gameTickNum < this.nextBountyCheckTick) {
             return;
         }
 
         this.nextBountyCheckTick = gameTickNum + this.settings.bountyCheckIntervalTicks;
 
-        let poorestParticipant: FfaParticipant | null = null;
-        let minPower = Infinity;
+        let richestParticipant: FfaParticipant | null = null;
+        let maxPower = -1;
 
-        for (const team of Array.from(this.teams.values())) {
-            const suzerain = team.suzerain;
-            if (suzerain.powerPoints < minPower) {
-                minPower = suzerain.powerPoints;
-                poorestParticipant = suzerain;
+        // Ищем самого богатого игрока среди всех активных участников
+        for (const participant of Array.from(this.participants.values())) {
+            if (!participant.isDefeated && participant.powerPoints > maxPower) {
+                maxPower = participant.powerPoints;
+                richestParticipant = participant;
             }
         }
 
-        if (poorestParticipant && poorestParticipant !== this.bountyParticipant) {
-            this.bountyParticipant = poorestParticipant;
-            const message = `Бог битвы недоволен слабостью ${poorestParticipant.name}! Награда за его голову удвоена!`;
+        if (richestParticipant && richestParticipant !== this.bountyParticipant) {
+            this.bountyParticipant = richestParticipant;
+            const message = `${richestParticipant.name} становится главной целью! Награда за его голову удвоена!`;
             broadcastMessage(message, createHordeColor(255, 255, 100, 100));
         }
     }
@@ -458,25 +458,60 @@ export class AutoFfaPlugin extends HordePluginBase {
                 // =================================================
                 // === Сценарий: Побежден Сюзерен (вся команда) ===
                 // =================================================
-                this.log.info(`Сюзерен ${defeated.name} (команда ${loserTeam.id}) был побежден ${winner.name}. Вся команда переходит к победителю.`);
+                if (this.settings.weakenSnowballEffect) {
+                    // --- НОВАЯ ЛОГИКА: ОСЛАБЛЕНИЕ СНЕЖНОГО КОМА ---
+                    this.log.info(`Сюзерен ${defeated.name} побежден ${winner.name}. Эффект снежного кома ослаблен.`);
 
-                const allLosers = loserTeam.getMembers();
-                for (const member of allLosers) {
-                    // Распределяем трофеи за каждого члена проигравшей команды
-                    const takenPercentage = member.isSuzerain() ? 0.20 : 0.10; // 20% за сюзерена, 10% за вассала
-                    winnerTeam.shareSpoils(member, takenPercentage);
+                    // 1. Победитель забирает только сюзерена
+                    winnerTeam.shareSpoils(defeated, 0.20); // Трофеи за сюзерена
+                    winnerTeam.addVassal(defeated);
+                    broadcastMessage(`${winner.name} победил сюзерена ${defeated.name} и сделал его своим вассалом!`, winnerTeam.suzerain.settlement.SettlementColor);
+
+                    // 2. Вассалы проигравшего становятся независимыми
+                    const formerVassals = loserTeam.vassals;
+                    if (formerVassals.length > 0) {
+                        broadcastMessage(`Вассалы ${defeated.name} обретают независимость!`, loserTeam.suzerain.settlement.SettlementColor);
+                        for (const vassal of formerVassals) {
+                            // Каждый бывший вассал создает новую команду
+                            const newTeam = new Team(vassal.id, vassal, this.settings);
+                            this.teams.set(newTeam.id, newTeam);
+                            this.log.info(`Бывший вассал ${vassal.name} создал новую команду (id: ${newTeam.id}).`);
+                            
+                            // Объявляем войну всем существующим командам.
+                            // Мир с командой-победителем будет установлен позже, когда для нее вызовется startTemporaryPeace.
+                            const allOtherTeams = Array.from(this.teams.values()).filter(t => t.id !== newTeam.id);
+                            newTeam.setWarStatusWithAll(allOtherTeams);
+                        }
+                    }
+
+                    // 3. Удаляем старую команду
+                    this.teams.delete(loserTeam.id);
+
+                    // 4. Сбрасываем флаг поражения только для бывшего сюзерена
+                    defeated.isDefeated = false;
+
+                } else {
+                    // --- СТАРАЯ ЛОГИКА: ПОЛНОЕ ПОГЛОЩЕНИЕ ---
+                    this.log.info(`Сюзерен ${defeated.name} (команда ${loserTeam.id}) был побежден ${winner.name}. Вся команда переходит к победителю.`);
+
+                    const allLosers = loserTeam.getMembers();
+                    for (const member of allLosers) {
+                        // Распределяем трофеи за каждого члена проигравшей команды
+                        const takenPercentage = member.isSuzerain() ? 0.20 : 0.10; // 20% за сюзерена, 10% за вассала
+                        winnerTeam.shareSpoils(member, takenPercentage);
+                    }
+
+                    // Перемещаем всех членов проигравшей команды в команду победителя
+                    winnerTeam.addSuzerainAndVassals(loserTeam.suzerain, loserTeam.vassals);
+                    
+                    // Удаляем старую, теперь пустую, команду
+                    this.teams.delete(loserTeam.id);
+
+                    broadcastMessage(`${winner.name} разгромил королевство ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
+                    
+                    // Сбрасываем флаг поражения для всех, кто перешел
+                    allLosers.forEach(member => member.isDefeated = false);
                 }
-
-                // Перемещаем всех членов проигравшей команды в команду победителя
-                winnerTeam.addSuzerainAndVassals(loserTeam.suzerain, loserTeam.vassals);
-                
-                // Удаляем старую, теперь пустую, команду
-                this.teams.delete(loserTeam.id);
-
-                broadcastMessage(`${winner.name} разгромил королевство ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
-                
-                // Сбрасываем флаг поражения для всех, кто перешел
-                allLosers.forEach(member => member.isDefeated = false);
             } else {
                 // =================================================
                 // === Сценарий: Побежден Вассал (один участник) ===
@@ -654,7 +689,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         if (decorator) {
             let statusText = participant.isSuzerain() ? "Сюзерен" : "Вассал";
             if (this.bountyParticipant && participant.id === this.bountyParticipant.id) {
-                statusText += " (награда за голову!)";
+                statusText += " (ГЛАВНАЯ ЦЕЛЬ)";
             }
             decorator.Text = statusText;
             decorator.Position = createPoint(Math.floor(32 * (participant.castle.Cell.X + 2.7)), Math.floor(32 * (participant.castle.Cell.Y + 3.6)));
@@ -760,7 +795,27 @@ export class AutoFfaPlugin extends HordePluginBase {
             message = `\t9. Самый влиятельный игрок в команде (по очкам силы) становится сюзереном.\n` +
                       `\t10. После уплаты налогов и зарплат вы получаете ресурсы (${Math.round(this.settings.powerPointsRewardPercentage * 100)}% от очков силы) и людей (${(this.settings.powerPointsRewardPercentage * 0.02 * 100).toFixed(2)}% от очков силы).\n` +
                       `\t11. Нейтральным юнитам урон не наносится.\n`;
-        } else if (gameTickNum === 50 * 90) {
+        } else if (gameTickNum === 50 * 85) {
+            let message = "Включенные механики:\n";
+            if (this.settings.enableTargetSystem) {
+                message += "\t- Цели: Атакуйте назначенную цель для получения бонусных очков.\n";
+            }
+            if (this.settings.enableBountyOnLeader) {
+                message += "\t- Награда за голову: Атакуйте лидера по очкам для получения бонуса.\n";
+            }
+            if (this.settings.enableCoalitionsAgainstLeader) {
+                message += "\t- Коалиции: Слабые игроки объединяются против доминирующей команды.\n";
+            }
+            if (this.settings.weakenSnowballEffect) {
+                message += "\t- Ослабление 'снежного кома': При поражении сюзерена его вассалы становятся свободными.\n";
+            }
+            if (this.settings.enableBattleSummaryMessages) {
+                message += "\t- Итоги битвы: Получайте сводку о заработанных очках после боя.\n";
+            }
+            if (this.settings.enableInitialPeacePeriod) {
+                message += `\t- Начальный мир: ${this.settings.initialPeaceDurationTicks / 50 / 60} минут на развитие.\n`;
+            }
+        } else if (gameTickNum === 50 * 95) {
             message = "Правила объявлены. Да начнется битва!";
         }
 
