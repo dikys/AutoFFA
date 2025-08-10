@@ -352,7 +352,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
     
         // Если нет команд, которым нужна цель, выходим.
-        if (teamsNeedingTarget.length <= 1) {
+        if (teamsNeedingTarget.length === 0) {
             return;
         }
     
@@ -370,6 +370,20 @@ export class AutoFfaPlugin extends HordePluginBase {
     
             this.assignNewTargetForTeam(teamA, teamB);
             this.assignNewTargetForTeam(teamB, teamA);
+        }
+    
+        // 4. Если осталась одна команда, назначаем ей цель из уже существующих.
+        if (teamsNeedingTarget.length === 1) {
+            const lastTeam = teamsNeedingTarget[0];
+            const potentialTargetTeams = allTeams.filter(t => t.id !== lastTeam.id);
+    
+            if (potentialTargetTeams.length > 0) {
+                const targetTeam = potentialTargetTeams[randomizer.RandomNumber(0, potentialTargetTeams.length - 1)];
+                this.assignNewTargetForTeam(lastTeam, targetTeam);
+            } else {
+                // Некому назначать в цели, очищаем цель
+                this.assignNewTargetForTeam(lastTeam, null);
+            }
         }
     }
 
