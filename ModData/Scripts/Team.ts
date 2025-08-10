@@ -199,7 +199,9 @@ export class Team {
 
             const msg = createGameMessageWithSound(`За победу над ${defeated.name} вам начислено ${Math.round(gain)} очков силы (ваша доля составляет ${Math.round(damageShare * 100)} %).`, member.settlement.SettlementColor);
             member.settlement.Messages.AddMessage(msg);
-            member.damageDealtTo.set(defeated.id, 0); // Сбрасываем счетчик урона
+            // Сбрасываем счетчики урона после распределения трофеев
+            member.damageDealtTo.set(defeated.id, 0);
+            member.castleDamageDealtTo.set(defeated.id, 0);
         }
     }
 

@@ -284,13 +284,20 @@ export class AutoFfaPlugin extends HordePluginBase {
             deltaPoints *= this.settings.bountyPowerPointsMultiplier;
         }
 
-        if (this.settings.enableTargetSystem && attacker.target && victim.id === attacker.target.id) {
+        // Бонус дается за атаку любого члена команды-цели
+        if (this.settings.enableTargetSystem && attacker.target && victim.teamId === attacker.target.teamId) {
             deltaPoints *= this.settings.targetPowerPointsMultiplier;
         }
 
         if (deltaPoints > 0) {
             attacker.powerPoints += deltaPoints;
+            // Урон для распределения трофеев (очков) всегда учитывается
             attacker.damageDealtTo.set(victim.id, (attacker.damageDealtTo.get(victim.id) || 0) + deltaPoints);
+
+            // Урон по замку учитывается отдельно для определения победителя
+            if (damageArgs.VictimUnit.Id === victim.castle.Id) {
+                attacker.castleDamageDealtTo.set(victim.id, (attacker.castleDamageDealtTo.get(victim.id) || 0) + deltaPoints);
+            }
 
             if (this.settings.enableBattleSummaryMessages) {
                 attacker.currentBattlePowerPoints += deltaPoints;
@@ -328,48 +335,69 @@ export class AutoFfaPlugin extends HordePluginBase {
         if (!this.settings.enableTargetSystem) {
             return;
         }
-
-        const allParticipants = Array.from(this.participants.values());
-
-        for (const participant of allParticipants) {
-            const currentTarget = participant.target;
-
-            // Переназначаем цель, если ее нет, она побеждена или стала союзником
-            if (!currentTarget || currentTarget.isDefeated || currentTarget.teamId === participant.teamId) {
-                this.assignNewTargetFor(participant, allParticipants);
+    
+        const allTeams = Array.from(this.teams.values());
+        const teamsNeedingTarget: Team[] = [];
+    
+        // 1. Определяем, каким командам нужна новая цель.
+        for (const team of allTeams) {
+            // Цель команды определяется целью ее сюзерена.
+            const suzerain = team.suzerain;
+            const currentTarget = suzerain.target;
+    
+            // Команде нужна цель, если у сюзерена ее нет, она побеждена или стала союзником.
+            if (!currentTarget || currentTarget.isDefeated || currentTarget.teamId === suzerain.teamId) {
+                teamsNeedingTarget.push(team);
             }
+        }
+    
+        // Если нет команд, которым нужна цель, выходим.
+        if (teamsNeedingTarget.length <= 1) {
+            return;
+        }
+    
+        // 2. Перемешиваем команды, чтобы назначения были случайными.
+        const randomizer = ActiveScena.GetRealScena().Context.Randomizer;
+        for (let i = teamsNeedingTarget.length - 1; i > 0; i--) {
+            const j = randomizer.RandomNumber(0, i);
+            [teamsNeedingTarget[i], teamsNeedingTarget[j]] = [teamsNeedingTarget[j], teamsNeedingTarget[i]];
+        }
+    
+        // 3. Назначаем цели парами.
+        while (teamsNeedingTarget.length >= 2) {
+            const teamA = teamsNeedingTarget.pop()!;
+            const teamB = teamsNeedingTarget.pop()!;
+    
+            this.assignNewTargetForTeam(teamA, teamB);
+            this.assignNewTargetForTeam(teamB, teamA);
         }
     }
 
-    private assignNewTargetFor(participant: FfaParticipant, allParticipants: FfaParticipant[]): void {
-        const potentialTargets = allParticipants.filter(p =>
-            p.id !== participant.id &&
-            p.teamId !== participant.teamId &&
-            !p.isDefeated
-        );
-
-        const newTarget = potentialTargets.length > 0
-            ? potentialTargets[ActiveScena.GetRealScena().Context.Randomizer.RandomNumber(0, potentialTargets.length - 1)]
-            : null;
-
+    private assignNewTargetForTeam(team: Team, targetTeam: Team | null): void {
+        const newTarget = targetTeam ? targetTeam.suzerain : null;
+        const oldTarget = team.suzerain.target;
+    
         // Отправляем сообщения, только если цель действительно изменилась
-        if (participant.target?.id !== newTarget?.id) {
-            participant.target = newTarget;
-
-            if (newTarget) {
-                // Сообщение для атакующего
-                const msgForAttacker = createGameMessageWithSound(
-                    `Ваша новая цель: ${newTarget.name}!`,
-                    newTarget.settlement.SettlementColor
-                );
-                participant.settlement.Messages.AddMessage(msgForAttacker);
-
-                // Сообщение для цели
-                const msgForTarget = createGameMessageWithSound(
-                    `Вы стали целью для ${participant.name}!`,
-                    participant.settlement.SettlementColor
-                );
-                newTarget.settlement.Messages.AddMessage(msgForTarget);
+        if (oldTarget?.id === newTarget?.id) {
+            return;
+        }
+    
+        // Устанавливаем новую цель для всех членов команды
+        for (const member of team.getMembers()) {
+            member.target = newTarget;
+        }
+    
+        if (newTarget && targetTeam) {
+            // Сообщение для атакующей команды
+            const msgForAttacker = createGameMessageWithSound(`Ваша новая цель: команда ${targetTeam.suzerain.name}!`, newTarget.settlement.SettlementColor);
+            for (const member of team.getMembers()) {
+                member.settlement.Messages.AddMessage(msgForAttacker);
+            }
+    
+            // Сообщение для команды-цели
+            const msgForTarget = createGameMessageWithSound(`Вы стали целью для команды ${team.suzerain.name}!`, team.suzerain.settlement.SettlementColor);
+            for (const member of targetTeam.getMembers()) {
+                member.settlement.Messages.AddMessage(msgForTarget);
             }
         }
     }
@@ -551,7 +579,8 @@ export class AutoFfaPlugin extends HordePluginBase {
         for (const participant of Array.from(this.participants.values())) {
             if (participant.teamId === defeated.teamId) continue;
 
-            const damage = participant.damageDealtTo.get(defeated.id) || 0;
+            // Победитель определяется по урону, нанесенному именно замку.
+            const damage = participant.castleDamageDealtTo.get(defeated.id) || 0;
             if (damage > maxDamage) {
                 maxDamage = damage;
                 winner = participant;
@@ -703,9 +732,17 @@ export class AutoFfaPlugin extends HordePluginBase {
         const decorator = this.targetDecorators.get(participant.id);
         if (decorator) {
             const target = participant.target;
-            if (target) {
-                decorator.Text = `Цель: ${target.name}`;
-                decorator.Color = target.settlement.SettlementColor;
+            if (target) { // target - это сюзерен команды-цели
+                const targetTeam = this.teams.get(target.teamId);
+                if (targetTeam) {
+                    const teamMemberNames = targetTeam.getMembers().map(m => m.name).join(', ');
+                    decorator.Text = `Цель: ${teamMemberNames}`;
+                    decorator.Color = target.settlement.SettlementColor;
+                } else {
+                    // Резервный вариант, если команда не найдена (не должно происходить)
+                    decorator.Text = `Цель: ${target.name}`;
+                    decorator.Color = target.settlement.SettlementColor;
+                }
                 // Позиция чуть ниже декоратора очков силы
                 decorator.Position = createPoint(Math.floor(32 * (participant.castle.Cell.X - 1)), Math.floor(32 * (participant.castle.Cell.Y - 1.8)));
             } else {
@@ -798,7 +835,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         } else if (gameTickNum === 50 * 85) {
             let message = "Включенные механики:\n";
             if (this.settings.enableTargetSystem) {
-                message += "\t- Цели: Атакуйте назначенную цель для получения бонусных очков.\n";
+                message += "\t- Цели: Командам назначаются симметричные цели. Атакуйте назначенную команду для получения бонусных очков.\n";
             }
             if (this.settings.enableBountyOnLeader) {
                 message += "\t- Награда за голову: Атакуйте лидера по очкам для получения бонуса.\n";

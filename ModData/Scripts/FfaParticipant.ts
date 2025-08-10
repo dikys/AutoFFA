@@ -27,6 +27,7 @@ export class FfaParticipant {
     public isDefeated: boolean = false;
     public powerPoints: number = 0; // Начальное значение устанавливается из настроек
     public damageDealtTo: Map<number, number> = new Map();
+    public castleDamageDealtTo: Map<number, number> = new Map();
     public lastPowerPointGainTick: number = 0;
     public currentBattlePowerPoints: number = 0;
     public nextRewardTime: number;
@@ -136,6 +137,7 @@ export class FfaParticipant {
      */
     public resetDamageCounters(): void {
         this.damageDealtTo.clear();
+        this.castleDamageDealtTo.clear();
     }
 
     /**
