@@ -860,6 +860,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             if (this.settings.weakenSnowballEffect) {
                 message += "\t- Ослабление 'снежного кома': При поражении сюзерена его вассалы становятся свободными.\n";
             }
+            if (this.settings.enablePowerPointsExchange) {
+                message += "\t- Обмен очками: Сюзерены и вассалы обмениваются очками силы при передаче ресурсов.\n";
+            }
             if (this.settings.enableBattleSummaryMessages) {
                 message += "\t- Итоги битвы: Получайте сводку о заработанных очках после боя.\n";
             }

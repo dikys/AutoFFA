@@ -1,5 +1,6 @@
 import { Settlement, Unit, UnitConfig, UnitDirection, UnitCommand } from "library/game-logic/horde-types";
 import { createResourcesAmount, ResourcesAmount, Point2D, createPoint } from "library/common/primitives";
+import { createGameMessageWithSound } from "library/common/messages";
 import { generateCellInSpiral } from "library/common/position-tools";
 import { unitCanBePlacedByRealMap } from "library/game-logic/unit-and-map";
 import { AutoFFASettings } from "./AutoFFASettings";
@@ -31,6 +32,8 @@ export class FfaParticipant {
     public lastPowerPointGainTick: number = 0;
     public currentBattlePowerPoints: number = 0;
     public nextRewardTime: number;
+    public totalPointsFromTribute: number = 0;
+    public totalPointsFromGenerosity: number = 0;
 
     // ==================================================================================================
     // Private properties
@@ -120,6 +123,24 @@ export class FfaParticipant {
             const resourceTribute = createResourcesAmount(tribute.Gold, tribute.Metal, tribute.Lumber, 0);
             if (resourceTribute.Gold > 0 || resourceTribute.Metal > 0 || resourceTribute.Lumber > 0) {
                 this.suzerain.receiveResources(resourceTribute);
+
+                // Новая логика обмена очками силы
+                if (this.settings.enablePowerPointsExchange) {
+                    const totalResourceValue = resourceTribute.Gold + resourceTribute.Metal + resourceTribute.Lumber;
+                    if (totalResourceValue > 0) {
+                        const pointsToTransfer = totalResourceValue * this.settings.powerPointsExchangeRate;
+                        // Сюзерен отдает очки вассалу за дань
+                        const actualPointsTransferred = Math.min(this.suzerain.powerPoints, pointsToTransfer);
+                        if (actualPointsTransferred > 0) {
+                            this.suzerain.powerPoints -= actualPointsTransferred;
+                            this.powerPoints += actualPointsTransferred;
+
+                            // Отслеживаем обмен
+                            this.suzerain.totalPointsFromTribute -= actualPointsTransferred;
+                            this.totalPointsFromTribute += actualPointsTransferred;
+                        }
+                    }
+                }
             }
         }
     }
@@ -166,6 +187,29 @@ export class FfaParticipant {
      * Выдает участнику награду в виде ресурсов на основе его очков силы.
      */
     public givePowerPointReward(): void {
+        if (this.settings.enablePowerPointsExchange) {
+            // Сообщение об обмене очками
+            let exchangeSummary = "";
+            if (Math.abs(this.totalPointsFromTribute) >= 1) {
+                const action = this.totalPointsFromTribute > 0 ? "Получено" : "Потрачено";
+                const points = Math.round(Math.abs(this.totalPointsFromTribute));
+                exchangeSummary += `${action} ${points} очков в качестве платы за верность. `;
+            }
+            if (Math.abs(this.totalPointsFromGenerosity) >= 1) {
+                const action = this.totalPointsFromGenerosity > 0 ? "Получено" : "Потрачено";
+                const points = Math.round(Math.abs(this.totalPointsFromGenerosity));
+                exchangeSummary += `${action} ${points} очков в благодарность за щедрость.`;
+            }
+
+            if (exchangeSummary) {
+                const msg = createGameMessageWithSound(exchangeSummary.trim(), this.settlement.SettlementColor);
+                this.settlement.Messages.AddMessage(msg);
+            }
+
+            this.totalPointsFromTribute = 0;
+            this.totalPointsFromGenerosity = 0;
+        }
+
         if (this.powerPoints < 10) return;
 
         const reward = createResourcesAmount(

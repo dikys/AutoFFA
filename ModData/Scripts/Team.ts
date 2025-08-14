@@ -172,6 +172,24 @@ export class Team {
             if (payment.Gold > 0 || payment.Metal > 0 || payment.Lumber > 0) {
                 vassal.receiveResources(payment);
                 totalGiven.Add(payment);
+
+                // Новая логика обмена очками силы
+                if (this.settings.enablePowerPointsExchange) {
+                    const totalResourceValue = payment.Gold + payment.Metal + payment.Lumber;
+                    if (totalResourceValue > 0) {
+                        const pointsToTransfer = totalResourceValue * this.settings.powerPointsExchangeRate;
+                        // Вассал отдает очки сюзерену за щедрость
+                        const actualPointsTransferred = Math.min(vassal.powerPoints, pointsToTransfer);
+                        if (actualPointsTransferred > 0) {
+                            vassal.powerPoints -= actualPointsTransferred;
+                            this._suzerain.powerPoints += actualPointsTransferred;
+
+                            // Отслеживаем обмен
+                            vassal.totalPointsFromGenerosity -= actualPointsTransferred;
+                            this._suzerain.totalPointsFromGenerosity += actualPointsTransferred;
+                        }
+                    }
+                }
             }
         }
 
