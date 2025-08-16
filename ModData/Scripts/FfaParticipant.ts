@@ -4,6 +4,7 @@ import { createGameMessageWithSound } from "library/common/messages";
 import { generateCellInSpiral } from "library/common/position-tools";
 import { unitCanBePlacedByRealMap } from "library/game-logic/unit-and-map";
 import { AutoFFASettings } from "./AutoFFASettings";
+import { log } from "library/common/logging";
 
 const SpawnUnitParameters = HordeClassLibrary.World.Objects.Units.SpawnUnitParameters;
 
@@ -59,6 +60,8 @@ export class FfaParticipant {
 
         const settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Model");
         this.nextRewardTime = settlementCensusModel.TaxAndSalaryUpdatePeriod;
+
+        log.info(`[${this.name}] Участник создан. Начальная позиция замка: ${this.initialCastlePosition.X},${this.initialCastlePosition.Y}.`);
     }
 
     // ==================================================================================================
@@ -75,6 +78,7 @@ export class FfaParticipant {
         const commandsMind = this._castle.CommandsMind;
         const disallowedCommands = ScriptUtils.GetValue(commandsMind, "DisallowedCommands");
         if (!disallowedCommands.ContainsKey(UnitCommand.DestroySelf)) {
+            log.info(`[${this.name}] Установлен новый замок (ID: ${newCastle.Id}). Самоуничтожение запрещено.`);
             disallowedCommands.Add(UnitCommand.DestroySelf, 1);
         }
     }
@@ -101,14 +105,17 @@ export class FfaParticipant {
 
     /**
      * Платит дань сюзерену, если превышены лимиты ресурсов и населения.
+     * @returns {boolean} True, если дань была уплачена.
      */
-    public payTribute(): void {
+    public payTribute(): boolean {
         if (!this.isVassal() || !this.suzerain) {
-            return;
+            return false;
         }
+        log.info(`[${this.name}] Проверка уплаты дани сюзерену ${this.suzerain.name}.`);
 
         const resourceLimit = Math.floor(this.settings.vassalResourceLimit + 0.1 * this.powerPoints);
         const populationLimit = Math.floor(this.settings.vassalPopulationLimit + 0.002 * this.powerPoints);
+        log.info(`[${this.name}] Лимиты: Ресурсы=${resourceLimit}, Население=${populationLimit}. Текущие ресурсы: G:${this.settlement.Resources.Gold}, M:${this.settlement.Resources.Metal}, L:${this.settlement.Resources.Lumber}. Своб. население: ${this.settlement.Resources.FreePeople}.`);
 
         const tribute = createResourcesAmount(
             Math.max(0, this.settlement.Resources.Gold - resourceLimit),
@@ -118,31 +125,47 @@ export class FfaParticipant {
         );
 
         if (tribute.Gold > 0 || tribute.Metal > 0 || tribute.Lumber > 0 || tribute.People > 0) {
+            log.info(`[${this.name}] Рассчитана дань: ${tribute.Gold}G, ${tribute.Metal}M, ${tribute.Lumber}L, ${tribute.People}P.`);
             this.settlement.Resources.TakeResources(tribute);
             
             const resourceTribute = createResourcesAmount(tribute.Gold, tribute.Metal, tribute.Lumber, 0);
             if (resourceTribute.Gold > 0 || resourceTribute.Metal > 0 || resourceTribute.Lumber > 0) {
+                log.info(`[${this.name}] -> Передача ресурсов сюзерену ${this.suzerain.name}.`);
                 this.suzerain.receiveResources(resourceTribute);
-
-                // Новая логика обмена очками силы
+                
+                // Возвращаем обмен очками с надежной защитой от зацикливания
                 if (this.settings.enablePowerPointsExchange) {
                     const totalResourceValue = resourceTribute.Gold + resourceTribute.Metal + resourceTribute.Lumber;
                     if (totalResourceValue > 0) {
                         const pointsToTransfer = totalResourceValue * this.settings.powerPointsExchangeRate;
-                        // Сюзерен отдает очки вассалу за дань
-                        const actualPointsTransferred = Math.min(this.suzerain.powerPoints, pointsToTransfer);
-                        if (actualPointsTransferred > 0) {
-                            this.suzerain.powerPoints -= actualPointsTransferred;
-                            this.powerPoints += actualPointsTransferred;
+                        
+                        // НАДЕЖНАЯ ЗАЩИТА: Сюзерен передает очки, только если он останется сильнее вассала ПОСЛЕ обмена.
+                        const powerDifference = this.suzerain.powerPoints - this.powerPoints;
 
-                            // Отслеживаем обмен
-                            this.suzerain.totalPointsFromTribute -= actualPointsTransferred;
-                            this.totalPointsFromTribute += actualPointsTransferred;
+                        // Чтобы сюзерен остался сильнее, разница в силе должна быть больше, чем удвоенное 
+                        // количество передаваемых очков. Это гарантирует, что смена власти не произойдет.
+                        if (powerDifference > pointsToTransfer * 2) {
+                            const actualPointsTransferred = Math.min(this.suzerain.powerPoints, pointsToTransfer);
+
+                            if (actualPointsTransferred > 0) {
+                                log.info(`[${this.name}] Обмен очками за дань: ${this.suzerain.name} (-${Math.round(actualPointsTransferred)}) -> ${this.name} (+${Math.round(actualPointsTransferred)}).`);
+                                this.suzerain.powerPoints -= actualPointsTransferred;
+                                this.powerPoints += actualPointsTransferred;
+
+                                // Отслеживаем обмен для итоговой сводки
+                                this.suzerain.totalPointsFromTribute -= actualPointsTransferred;
+                                this.totalPointsFromTribute += actualPointsTransferred;
+                            }
+                        } else {
+                            log.info(`[${this.name}] Обмен очками за дань не произошел: передача (${Math.round(pointsToTransfer)}) нарушила бы баланс сил. Разница: ${Math.round(powerDifference)}.`);
                         }
                     }
                 }
             }
+            return true;
         }
+        log.info(`[${this.name}] Дань не требуется.`);
+        return false;
     }
 
     /**
@@ -150,6 +173,7 @@ export class FfaParticipant {
      * @param {ResourcesAmount} amount - Количество добавляемых ресурсов.
      */
     public receiveResources(amount: ResourcesAmount): void {
+        log.info(`[${this.name}] Получение ресурсов: ${amount.Gold}G, ${amount.Metal}M, ${amount.Lumber}L, ${amount.People}P.`);
         this.settlement.Resources.AddResources(amount);
     }
 
@@ -157,6 +181,7 @@ export class FfaParticipant {
      * Сбрасывает счетчики урона для этого участника.
      */
     public resetDamageCounters(): void {
+        log.info(`[${this.name}] Сброс счетчиков урона.`);
         this.damageDealtTo.clear();
         this.castleDamageDealtTo.clear();
     }
@@ -165,6 +190,7 @@ export class FfaParticipant {
      * Возрождает замок участника в допустимом месте рядом с его начальной позицией.
      */
     public respawnCastle(): void {
+        log.info(`[${this.name}] Попытка возродить замок...`);
         const generator = generateCellInSpiral(this.initialCastlePosition.X, this.initialCastlePosition.Y);
         const spawnParams = new SpawnUnitParameters();
         spawnParams.ProductUnitConfig = this.castleConfig;
@@ -176,17 +202,21 @@ export class FfaParticipant {
                 const newCastle = this.settlement.Units.SpawnUnit(spawnParams);
 
                 if (newCastle) {
+                    log.info(`[${this.name}] Замок успешно возрожден в ${pos.value.X},${pos.value.Y}.`);
                     this.castle = newCastle; // Используем сеттер для применения логики
                     return;
                 }
             }
         }
+        log.error(`[${this.name}] НЕ УДАЛОСЬ возродить замок! Не найдено свободного места.`);
     }
 
     /**
      * Выдает участнику награду в виде ресурсов на основе его очков силы.
+     * @returns {boolean} True, если награда была выдана.
      */
-    public givePowerPointReward(): void {
+    public givePowerPointReward(): boolean {
+        log.info(`[${this.name}] Проверка наград за очки силы. Текущие очки: ${Math.round(this.powerPoints)}`);
         if (this.settings.enablePowerPointsExchange) {
             // Сообщение об обмене очками
             let exchangeSummary = "";
@@ -202,6 +232,7 @@ export class FfaParticipant {
             }
 
             if (exchangeSummary) {
+                log.info(`[${this.name}] Сводка по обмену очками: ${exchangeSummary.trim()}`);
                 const msg = createGameMessageWithSound(exchangeSummary.trim(), this.settlement.SettlementColor);
                 this.settlement.Messages.AddMessage(msg);
             }
@@ -210,18 +241,32 @@ export class FfaParticipant {
             this.totalPointsFromGenerosity = 0;
         }
 
-        if (this.powerPoints < 10) return;
-
-        const reward = createResourcesAmount(
-            Math.floor(this.settings.powerPointsRewardPercentage * this.powerPoints),
-            Math.floor(this.settings.powerPointsRewardPercentage * this.powerPoints),
-            Math.floor(this.settings.powerPointsRewardPercentage * this.powerPoints),
-            Math.floor(0.02 * this.settings.powerPointsRewardPercentage * this.powerPoints)
-        );
-        this.settlement.Resources.AddResources(reward);
-
         const settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Model");
         this.nextRewardTime += settlementCensusModel.TaxAndSalaryUpdatePeriod;
+        log.info(`[${this.name}] Следующее время награды обновлено на ${this.nextRewardTime}.`);
+
+        if (this.powerPoints < 10) {
+            log.info(`[${this.name}] Недостаточно очков силы (${Math.round(this.powerPoints)}) для награды. Пропускаем.`);
+            return false;
+        }
+
+        const rewardPercentage = this.settings.powerPointsRewardPercentage;
+        const peopleMultiplier = 0.02;
+
+        const resourceReward = Math.floor(rewardPercentage * this.powerPoints);
+        const peopleReward = Math.floor(peopleMultiplier * rewardPercentage * this.powerPoints);
+
+        log.info(`[${this.name}] Расчет награды. Очки: ${Math.round(this.powerPoints)}, %: ${rewardPercentage}. Ресурсы: ${resourceReward}, Люди: ${peopleReward}`);
+        
+        const reward = createResourcesAmount(
+            resourceReward,
+            resourceReward,
+            resourceReward,
+            peopleReward
+        );
+        this.settlement.Resources.AddResources(reward);
+        log.info(`[${this.name}] Награда выдана.`);
+        return true;
     }
 
     /**

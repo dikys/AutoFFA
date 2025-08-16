@@ -4,6 +4,7 @@ import { createGameMessageWithSound, broadcastMessage } from "library/common/mes
 import { DiplomacyStatus } from "library/game-logic/horde-types";
 import { DiplomacyManager } from "./DiplomacyManager";
 import { AutoFFASettings } from "./AutoFFASettings";
+import { log } from "library/common/logging";
 
 /**
  * Представляет команду (альянс), состоящую из сюзерена и его вассалов.
@@ -35,6 +36,7 @@ export class Team {
         this._suzerain.teamId = this.id;
         this._suzerain.suzerain = null;
         this.settings = settings;
+        log.info(`Создана новая команда (id: ${this.id}) с сюзереном ${initialSuzerain.name}.`);
     }
 
     // ==================================================================================================
@@ -82,13 +84,16 @@ export class Team {
      * @param {FfaParticipant} vassal - Участник, которого нужно добавить в качестве вассала.
      */
     public addVassal(vassal: FfaParticipant): void {
+        log.info(`[Команда ${this.id}] Добавление вассала ${vassal.name} (id: ${vassal.id}) под сюзеренство ${this.suzerain.name}.`);
         this._vassals.set(vassal.id, vassal);
         vassal.teamId = this.id;
         vassal.suzerain = this._suzerain;
+        vassal.target = this._suzerain.target; // Синхронизируем цель с сюзереном
 
         this.updateDiplomacyOnJoin(vassal);
 
         if (vassal.isDefeated) {
+            log.info(`[Команда ${this.id}] Вассал ${vassal.name} побежден, возрождаем замок.`);
             vassal.respawnCastle();
             const msg = createGameMessageWithSound(`Ваш новый сюзерен, ${this.suzerain.name}, приветствует вас. Вам предоставлен новый замок.`, this.suzerain.settlement.SettlementColor);
             vassal.settlement.Messages.AddMessage(msg);
@@ -101,6 +106,7 @@ export class Team {
      * @param {FfaParticipant[]} formerVassals - Вассалы побежденной команды.
      */
     public addSuzerainAndVassals(formerSuzerain: FfaParticipant, formerVassals: FfaParticipant[]): void {
+        log.info(`[Команда ${this.id}] Поглощение команды ${formerSuzerain.name}.`);
         this.addVassal(formerSuzerain);
         for (const vassal of formerVassals) {
             this.addVassal(vassal);
@@ -114,6 +120,7 @@ export class Team {
      */
     public removeVassal(vassal: FfaParticipant): boolean {
         if (this._vassals.has(vassal.id)) {
+            log.info(`[Команда ${this.id}] Удаление вассала ${vassal.name} из команды.`);
             this._vassals.delete(vassal.id);
             vassal.suzerain = null; // Сбрасываем сюзерена
             return true;
@@ -123,24 +130,29 @@ export class Team {
 
     /**
      * Проверяет, следует ли повысить более могущественного вассала до сюзерена.
+     * @returns {boolean} True, если произошла смена сюзерена.
      */
-    public promoteNewSuzerainIfNeeded(): void {
+    public promoteNewSuzerainIfNeeded(): boolean {
         const mostPowerfulMember = this.getMembers().reduce((prev, current) => 
             (prev.powerPoints > current.powerPoints) ? prev : current
         );
 
         if (mostPowerfulMember.id !== this._suzerain.id) {
             const oldSuzerain = this._suzerain;
+            log.info(`[Команда ${this.id}] Смена власти! ${mostPowerfulMember.name} (${Math.round(mostPowerfulMember.powerPoints)} очков) становится новым сюзереном, смещая ${oldSuzerain.name} (${Math.round(oldSuzerain.powerPoints)} очков).`);
             this.changeSuzerain(mostPowerfulMember);
             broadcastMessage(`Сюзерен ${oldSuzerain.name} уступил более влиятельному ${mostPowerfulMember.name}!`, this.suzerain.settlement.SettlementColor);
+            return true;
         }
+        return false;
     }
 
     /**
      * Распределяет ресурсы от щедрого сюзерена его вассалам.
+     * @returns {boolean} True, если ресурсы были распределены.
      */
-    public distributeGenerosity(): void {
-        if (this._vassals.size === 0) return;
+    public distributeGenerosity(): boolean {
+        if (this._vassals.size === 0) return false;
 
         const suzerainRes = this._suzerain.settlement.Resources;
         const generosity = createResourcesAmount(
@@ -150,7 +162,9 @@ export class Team {
             0
         );
 
-        if (generosity.Gold === 0 && generosity.Metal === 0 && generosity.Lumber === 0) return;
+        if (generosity.Gold === 0 && generosity.Metal === 0 && generosity.Lumber === 0) return false;
+
+        log.info(`[Команда ${this.id}] Сюзерен ${this.suzerain.name} проявляет щедрость. Доступно для распределения: ${generosity.Gold}G, ${generosity.Metal}M, ${generosity.Lumber}L.`);
 
         const sharePerVassal = createResourcesAmount(
             Math.floor(generosity.Gold / this._vassals.size),
@@ -159,7 +173,10 @@ export class Team {
             0
         );
 
-        if (sharePerVassal.Gold === 0 && sharePerVassal.Metal === 0 && sharePerVassal.Lumber === 0) return;
+        if (sharePerVassal.Gold === 0 && sharePerVassal.Metal === 0 && sharePerVassal.Lumber === 0) {
+            log.info(`[Команда ${this.id}] Доля на одного вассала слишком мала для распределения.`);
+            return false;
+        }
 
         let totalGiven = createResourcesAmount(0, 0, 0, 0);
         for (const vassal of this.vassals) {
@@ -170,6 +187,7 @@ export class Team {
                 0
             );
             if (payment.Gold > 0 || payment.Metal > 0 || payment.Lumber > 0) {
+                log.info(`[Команда ${this.id}] -> Вассал ${vassal.name} получает ${payment.Gold}G, ${payment.Metal}M, ${payment.Lumber}L.`);
                 vassal.receiveResources(payment);
                 totalGiven.Add(payment);
 
@@ -181,6 +199,7 @@ export class Team {
                         // Вассал отдает очки сюзерену за щедрость
                         const actualPointsTransferred = Math.min(vassal.powerPoints, pointsToTransfer);
                         if (actualPointsTransferred > 0) {
+                            log.info(`[Команда ${this.id}] Обмен очками: ${vassal.name} (-${Math.round(actualPointsTransferred)}) -> ${this._suzerain.name} (+${Math.round(actualPointsTransferred)}).`);
                             vassal.powerPoints -= actualPointsTransferred;
                             this._suzerain.powerPoints += actualPointsTransferred;
 
@@ -194,8 +213,11 @@ export class Team {
         }
 
         if (totalGiven.Gold > 0 || totalGiven.Metal > 0 || totalGiven.Lumber > 0) {
+            log.info(`[Команда ${this.id}] Сюзерен ${this.suzerain.name} всего распределил: ${totalGiven.Gold}G, ${totalGiven.Metal}M, ${totalGiven.Lumber}L.`);
             this._suzerain.settlement.Resources.TakeResources(totalGiven);
+            return true;
         }
+        return false;
     }
 
     /**
@@ -205,15 +227,18 @@ export class Team {
      */
     public shareSpoils(defeated: FfaParticipant, takenPercentage: number): void {
         const distributedPower = defeated.powerPoints * takenPercentage;
+        log.info(`[Команда ${this.id}] Распределение трофеев за победу над ${defeated.name}. Всего очков для распределения: ${Math.round(distributedPower)}.`);
         defeated.powerPoints -= distributedPower;
 
         const members = this.getMembers();
         const totalDamage = members.reduce((sum, member) => sum + Math.max(1, member.damageDealtTo.get(defeated.id) || 0), 0);
+        log.info(`[Команда ${this.id}] Общий урон по ${defeated.name} от команды: ${Math.round(totalDamage)}.`);
 
         for (const member of members) {
             const damageShare = Math.max(1, member.damageDealtTo.get(defeated.id) || 0) / totalDamage;
             const gain = distributedPower * damageShare;
             member.powerPoints += gain;
+            log.info(`[Команда ${this.id}] -> ${member.name} получает ${Math.round(gain)} очков (доля урона: ${Math.round(damageShare * 100)}%).`);
 
             const msg = createGameMessageWithSound(`За победу над ${defeated.name} вам начислено ${Math.round(gain)} очков силы (ваша доля составляет ${Math.round(damageShare * 100)} %).`, member.settlement.SettlementColor);
             member.settlement.Messages.AddMessage(msg);
@@ -228,6 +253,7 @@ export class Team {
      * @param {Team[]} allTeams - Список всех команд в игре.
      */
     public setPeaceStatusWithAll(allTeams: Team[]): void {
+        log.info(`[Команда ${this.id}] Устанавливает мир со всеми командами.`);
         this.setDiplomacyWithAll(allTeams, DiplomacyStatus.Neutral);
     }
 
@@ -236,6 +262,7 @@ export class Team {
      * @param {Team[]} allTeams - Список всех команд в игре.
      */
     public setWarStatusWithAll(allTeams: Team[]): void {
+        log.info(`[Команда ${this.id}] Объявляет войну всем командам.`);
         this.setDiplomacyWithAll(allTeams, DiplomacyStatus.War);
     }
 
@@ -249,6 +276,7 @@ export class Team {
      */
     private changeSuzerain(newSuzerain: FfaParticipant): void {
         const oldSuzerain = this._suzerain;
+        log.info(`[Команда ${this.id}] Внутренняя процедура смены сюзерена с ${oldSuzerain.name} на ${newSuzerain.name}.`);
 
         // Новый сюзерен больше не является вассалом
         this._vassals.delete(newSuzerain.id);
@@ -256,16 +284,14 @@ export class Team {
 
         // Старый сюзерен становится вассалом
         this._vassals.set(oldSuzerain.id, oldSuzerain);
-        oldSuzerain.suzerain = newSuzerain;
 
         // Обновляем ссылку на сюзерена команды
         this._suzerain = newSuzerain;
 
-        // Обновляем сюзерена для всех остальных вассалов
+        // Обновляем сюзерена и цель для всех вассалов (включая бывшего сюзерена)
         for (const vassal of this.vassals) {
-            if (vassal.id !== oldSuzerain.id) {
-                vassal.suzerain = newSuzerain;
-            }
+            vassal.suzerain = newSuzerain;
+            vassal.target = newSuzerain.target;
         }
     }
 
@@ -277,6 +303,7 @@ export class Team {
     private setDiplomacyWithAll(otherTeams: Team[], status: DiplomacyStatus): void {
         for (const otherTeam of otherTeams) {
             if (this.id === otherTeam.id) continue;
+            log.info(`[Команда ${this.id}] Установка статуса '${DiplomacyStatus[status]}' с командой ${otherTeam.id}.`);
 
             for (const member of this.getMembers()) {
                 for (const otherMember of otherTeam.getMembers()) {
@@ -292,6 +319,7 @@ export class Team {
      * @param {FfaParticipant} newMember - Новый участник.
      */
     private updateDiplomacyOnJoin(newMember: FfaParticipant): void {
+        log.info(`[Команда ${this.id}] Обновление дипломатии для нового члена ${newMember.name}. Установка союза с членами команды.`);
         for (const member of this.getMembers()) {
             if (newMember.id !== member.id) {
                 DiplomacyManager.setDiplomacy(newMember, member, DiplomacyStatus.Alliance);
