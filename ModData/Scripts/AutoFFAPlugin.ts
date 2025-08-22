@@ -803,21 +803,24 @@ export class AutoFfaPlugin extends HordePluginBase {
         // 3. Устанавливаем дипломатию для новой коалиции.
         coalitionLeaderTeam.setWarStatusWithAll([dominantTeam]);
 
-        // 4. Сообщаем всем игрокам.
+        // 4. Принудительно назначаем цели: коалиция против доминатора.
+        this.log.info(`Принудительное назначение целей после формирования коалиции: ${coalitionLeaderTeam.suzerain.name} vs ${dominantTeam.suzerain.name}.`);
+        this.assignNewTargetForTeam(coalitionLeaderTeam, dominantTeam);
+        this.assignNewTargetForTeam(dominantTeam, coalitionLeaderTeam);
+
+        // 5. Сообщаем всем игрокам.
         broadcastMessage(
             `Команда ${dominantTeam.suzerain.name} стала слишком сильной! ` +
             `Остальные игроки объединились в коалицию под предводительством ${coalitionLeaderTeam.suzerain.name}, чтобы дать отпор!`,
             coalitionLeaderTeam.suzerain.settlement.SettlementColor
         );
 
-        // После формирования коалиции, переназначаем цели
-        this.checkAndReassignTargets();
     }
 
     private findDominantTeam(): Team | null {
         const totalPlayers = this.participants.size;
         for (const team of Array.from(this.teams.values())) {
-            if (team.getMemberCount() > totalPlayers / 2) {
+            if (team.getMemberCount() >= totalPlayers / 2) {
                 return team;
             }
         }

@@ -25,7 +25,7 @@ export class AutoFFASettings {
     public weakenSnowballEffect: boolean = false;
 
     /** Коэффициент набора очков силы */
-    public powerPointPerHpCoeff: number = 0.015; 
+    public powerPointPerHpCoeff: number = 0.005; 
 
     /** Коэффициент набора очков силы при максимальном удалении */
     public powerPointCoeffByMaxDistance: number = 3;
@@ -64,7 +64,7 @@ export class AutoFFASettings {
     public enableTargetSystem: boolean = true;
 
     /** Множитель очков влияния, получаемых при атаке назначенной цели. */
-    public targetPowerPointsMultiplier: number = 2;
+    public targetPowerPointsMultiplier: number = 6;
 
     /**
      * Включить ли сообщения о результатах битвы.
