@@ -48,6 +48,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
     private participants: Map<number, FfaParticipant> = new Map();
     private teams: Map<number, Team> = new Map();
+    private participantPeaceUntilTick: Map<number, number> = new Map();
     private settlementUidToParticipantId: Map<string, number> = new Map();
     private unitCfgUidToPowerPerHp: Map<string, number> = new Map();
 
@@ -105,7 +106,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             case this.TICK_OFFSET.TRIBUTES: this.processVassalTributes(); break;
             case this.TICK_OFFSET.GENEROSITY: this.processSuzerainGenerosity(); break;
             case this.TICK_OFFSET.MIGRATIONS: this.processTeamMigrations(gameTickNum); break;
-            case this.TICK_OFFSET.PEACE_TREATY_CHECK: this.managePeaceTreaties(gameTickNum); break;
+            case this.TICK_OFFSET.PEACE_TREATY_CHECK: this.managePeaceTreaties(gameTickNum); this.manageParticipantPeaceTreaties(gameTickNum); break;
             case this.TICK_OFFSET.DECORATORS: this.updateDecorators(); break;
             case this.TICK_OFFSET.PROMOTIONS: this.promoteNewSuzerains(); break;
             case this.TICK_OFFSET.REWARDS: this.processPowerPointRewards(gameTickNum); break;
@@ -745,6 +746,8 @@ export class AutoFfaPlugin extends HordePluginBase {
                 continue;
             }
 
+            const newlyAcquiredParticipants: FfaParticipant[] = [];
+
             // Логика зависит от того, кто был побежден: сюзерен или вассал
             if (defeated.isSuzerain()) {
                 // =================================================
@@ -758,6 +761,7 @@ export class AutoFfaPlugin extends HordePluginBase {
                     this.log.info(`Победитель ${winner.name} забирает сюзерена ${defeated.name} в качестве вассала.`);
                     winnerTeam.shareSpoils(defeated, 0.20); // Трофеи за сюзерена
                     winnerTeam.addVassal(defeated);
+                    newlyAcquiredParticipants.push(defeated);
                     broadcastMessage(`${winner.name} победил сюзерена ${defeated.name} и сделал его своим вассалом!`, winnerTeam.suzerain.settlement.SettlementColor);
 
                     // 2. Вассалы проигравшего становятся независимыми
@@ -772,7 +776,6 @@ export class AutoFfaPlugin extends HordePluginBase {
                             this.log.info(`Бывший вассал ${vassal.name} создал новую команду (id: ${newTeam.id}).`);
                             
                             // Объявляем войну всем существующим командам.
-                            // Мир с командой-победителем будет установлен позже, когда для нее вызовется startTemporaryPeace.
                             const allOtherTeams = Array.from(this.teams.values()).filter(t => t.id !== newTeam.id);
                             newTeam.setWarStatusWithAll(allOtherTeams);
                         }
@@ -799,6 +802,7 @@ export class AutoFfaPlugin extends HordePluginBase {
                     // Перемещаем всех членов проигравшей команды в команду победителя
                     this.log.info(`Перемещаем всех членов команды ${loserTeam.id} в команду ${winnerTeam.id}.`);
                     winnerTeam.addSuzerainAndVassals(loserTeam.suzerain, loserTeam.vassals);
+                    newlyAcquiredParticipants.push(...allLosers);
                     
                     // Удаляем старую, теперь пустую, команду
                     this.log.info(`Удаляем старую команду ${defeated.name} (id: ${loserTeam.id}).`);
@@ -823,6 +827,7 @@ export class AutoFfaPlugin extends HordePluginBase {
                 // Перемещаем вассала
                 loserTeam.removeVassal(defeated);
                 winnerTeam.addVassal(defeated);
+                newlyAcquiredParticipants.push(defeated);
 
                 broadcastMessage(`${winner.name} захватил вассала ${defeated.name} у ${loserTeam.suzerain.name}!`, winnerTeam.suzerain.settlement.SettlementColor);
                 
@@ -830,18 +835,18 @@ export class AutoFfaPlugin extends HordePluginBase {
                 defeated.isDefeated = false;
             }
 
-            // После любого захвата команда-победитель получает временный мир
-            this.log.info(`Команда-победитель ${winnerTeam.suzerain.name} получает временный мир.`);
-            this.startTemporaryPeace(winnerTeam, gameTickNum);
-            const peaceDurationMinutes = Math.round(this.settings.temporaryPeaceDurationTicks / 50 / 60);
-            broadcastMessage(`Команда ${winnerTeam.suzerain.name} получает временный мир на ${peaceDurationMinutes} мин. для восстановления.`, winnerTeam.suzerain.settlement.SettlementColor);
+            // После любого захвата новые участники команды-победителя получают временный мир
+            if (newlyAcquiredParticipants.length > 0) {
+                this.log.info(`Новые участники команды ${winnerTeam.suzerain.name} (${newlyAcquiredParticipants.map(p => p.name).join(', ')}) получают временный мир.`);
+                this.startTemporaryPeaceForParticipants(newlyAcquiredParticipants, gameTickNum);
+                const peaceDurationMinutes = Math.round(this.settings.temporaryPeaceDurationTicks / 50 / 60);
+                broadcastMessage(`Новые поселения команды ${winnerTeam.suzerain.name} получают временный мир на ${peaceDurationMinutes} мин. для восстановления.`, winnerTeam.suzerain.settlement.SettlementColor);
+            }
         }
 
         if (defeatedParticipants.length > 0) {
             this.log.info(`Обработка миграций завершена.`);
-        }
-        // Если произошли изменения в составах команд, нужно переназначить цели
-        if (defeatedParticipants.length > 0) {
+            // Если произошли изменения в составах команд, нужно переназначить цели
             this.log.info(`Произошли изменения в составах команд, переназначаем цели.`);
             this.checkAndReassignTargets();
         }
@@ -864,10 +869,78 @@ export class AutoFfaPlugin extends HordePluginBase {
         return winner;
     }
 
-    private startTemporaryPeace(team: Team, gameTickNum: number): void {
-        const allTeams = Array.from(this.teams.values());
-        team.setPeaceStatusWithAll(allTeams);
-        team.peaceUntilTick = gameTickNum + this.settings.temporaryPeaceDurationTicks;
+    private startTemporaryPeaceForParticipants(participants: FfaParticipant[], gameTickNum: number): void {
+        const allParticipants = Array.from(this.participants.values());
+        const peaceDuration = this.settings.temporaryPeaceDurationTicks;
+
+        for (const protectedParticipant of participants) {
+            this.log.info(`Устанавливаем временный мир для ${protectedParticipant.name} на ${peaceDuration} тиков.`);
+            for (const otherParticipant of allParticipants) {
+                if (protectedParticipant.id !== otherParticipant.id) {
+                    if (protectedParticipant.teamId == otherParticipant.teamId) {
+                        DiplomacyManager.setDiplomacy(protectedParticipant, otherParticipant, DiplomacyStatus.Alliance);
+                    } else {
+                        DiplomacyManager.setDiplomacy(protectedParticipant, otherParticipant, DiplomacyStatus.Neutral);
+                    }
+                }
+            }
+            this.participantPeaceUntilTick.set(protectedParticipant.id, gameTickNum + peaceDuration);
+        }
+    }
+
+    private manageParticipantPeaceTreaties(gameTickNum: number): void {
+        if (this.participantPeaceUntilTick.size === 0) {
+            return;
+        }
+        this.log.info("Проверка истекших индивидуальных мирных договоров.");
+        
+        const expiredParticipantIds: number[] = [];
+
+        for (const participantId of Array.from(this.participantPeaceUntilTick.keys())) {
+            var peaceUntilTick = this.participantPeaceUntilTick.get(participantId) as number;
+            if (gameTickNum > peaceUntilTick) {
+                const participant = this.participants.get(participantId);
+                if (!participant || participant.isDefeated) {
+                    this.log.warning(`Участник с ID ${participantId} не найден или побежден. Удаляем из списка индивидуального мира.`);
+                    expiredParticipantIds.push(participantId);
+                    continue;
+                }
+
+                const team = this.teams.get(participant.teamId);
+                if (!team) {
+                    this.log.error(`Не найдена команда для участника ${participant.name} (id: ${participant.id}, teamId: ${participant.teamId}) при окончании индивидуального мира.`);
+                    expiredParticipantIds.push(participantId);
+                    continue;
+                }
+
+                this.log.info(`Индивидуальный мирный договор для ${participant.name} истек. Восстанавливаем командную дипломатию.`);
+                
+                // Устанавливаем войну со всеми, кроме сокомандников
+                const ownTeamId = participant.teamId;
+                const allOtherParticipants = Array.from(this.participants.values()).filter(p => p.id !== participant.id);
+
+                for (const other of allOtherParticipants) {
+                    if (this.participantPeaceUntilTick.has(other.id)) {
+                        continue;
+                    }
+                    if (other.teamId === ownTeamId) {
+                        DiplomacyManager.setDiplomacy(participant, other, DiplomacyStatus.Alliance);
+                    } else {
+                        DiplomacyManager.setDiplomacy(participant, other, DiplomacyStatus.War);
+                    }
+                }
+                
+                broadcastMessage(`Игрок ${participant.name} снова в бою!`, participant.settlement.SettlementColor);
+                expiredParticipantIds.push(participantId);
+            }
+        }
+
+        if (expiredParticipantIds.length > 0) {
+            this.log.info(`Истекло ${expiredParticipantIds.length} индивидуальных договоров.`);
+            for (const id of expiredParticipantIds) {
+                this.participantPeaceUntilTick.delete(id);
+            }
+        }
     }
 
     private managePeaceTreaties(gameTickNum: number): void {
@@ -991,18 +1064,22 @@ export class AutoFfaPlugin extends HordePluginBase {
 
     private updateDecorators(): void {
         this.log.info("Обновление декораторов.");
+        const scena = ActiveScena.GetRealScena();
+        const sceneWidthPx = scena.Size.Width * 32;
+        const sceneHeightPx = scena.Size.Height * 32;
+
         for (const participant of Array.from(this.participants.values())) {
             const castle = participant.castle;
             if (!castle || castle.IsDead) continue;
 
-            this.updatePowerPointsDecorator(participant);
-            this.updateStatusDecorator(participant);
-            this.updateTargetDecorator(participant);
+            this.updatePowerPointsDecorator(participant, sceneWidthPx, sceneHeightPx);
+            this.updateStatusDecorator(participant, sceneWidthPx, sceneHeightPx);
+            this.updateTargetDecorator(participant, sceneWidthPx, sceneHeightPx);
             this.updateCastleFrame(participant);
         }
     }
 
-    private updatePowerPointsDecorator(participant: FfaParticipant): void {
+    private updatePowerPointsDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number): void {
         const decorator = this.powerPointDecorators.get(participant.id);
         if (decorator) {
             const yOffsetPerLine = 0.5; // Вертикальное смещение на одну строку в единицах ячеек карты
@@ -1019,24 +1096,46 @@ export class AutoFfaPlugin extends HordePluginBase {
 
             const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
             const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
-            decorator.Text = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
-            decorator.Position = createPoint(32 * (participant.castle.Cell.X - 1), Math.floor(32 * (participant.castle.Cell.Y + finalOffsetY)));
+            const text = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
+            const x = 32 * (participant.castle.Cell.X - 1);
+            const y = Math.floor(32 * (participant.castle.Cell.Y + finalOffsetY));
+
+            // Проверяем, находится ли позиция в пределах видимости сцены
+            if (y < 0 || x < 0 || x > sceneWidthPx || y > sceneHeightPx) {
+                if (decorator.Text !== "") {
+                    decorator.Text = ""; // Скрываем текст, если он за пределами экрана
+                }
+            } else {
+                decorator.Text = text;
+                decorator.Position = createPoint(x, y);
+            }
         }
     }
 
-    private updateStatusDecorator(participant: FfaParticipant): void {
+    private updateStatusDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number): void {
         const decorator = this.statusDecorators.get(participant.id);
         if (decorator) {
             let statusText = participant.isSuzerain() ? "Сюзерен" : "Вассал";
             if (this.bountyParticipant && participant.id === this.bountyParticipant.id) {
                 statusText += " (ГЛАВНАЯ ЦЕЛЬ)";
             }
-            decorator.Text = statusText;
-            decorator.Position = createPoint(Math.floor(32 * (participant.castle.Cell.X + 2.7)), Math.floor(32 * (participant.castle.Cell.Y + 3.6)));
+            
+            const x = Math.floor(32 * (participant.castle.Cell.X + 2.7));
+            const y = Math.floor(32 * (participant.castle.Cell.Y + 3.6));
+
+            // Проверяем, находится ли позиция в пределах видимости сцены
+            if (y < 0 || x < 0 || x > sceneWidthPx || y > sceneHeightPx) {
+                if (decorator.Text !== "") {
+                    decorator.Text = ""; // Скрываем текст, если он за пределами экрана
+                }
+            } else {
+                decorator.Text = statusText;
+                decorator.Position = createPoint(x, y);
+            }
         }
     }
 
-    private updateTargetDecorator(participant: FfaParticipant): void {
+    private updateTargetDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number): void {
         if (!this.settings.enableTargetSystem) {
             return;
         }
@@ -1074,16 +1173,25 @@ export class AutoFfaPlugin extends HordePluginBase {
         // 1. Обновляем декоратор заголовка "Цель:" (используем decorators[0])
         const titleDecorator = decorators[0];
         if (targetMembers.length > 0) {
-            titleDecorator.Text = "Цель:";
-            const ppDecorator = this.powerPointDecorators.get(participant.id);
-            if (ppDecorator) {
-                titleDecorator.Color = ppDecorator.Color;
+            const x = Math.floor(32 * castleX);
+            const y = Math.floor(32 * (castleY + titleOffsetY));
+            const isVisible = y >= 0 && x >= 0 && x <= sceneWidthPx && y <= sceneHeightPx;
+
+            if (isVisible) {
+                titleDecorator.Text = "Цель:";
+                const ppDecorator = this.powerPointDecorators.get(participant.id);
+                if (ppDecorator) {
+                    titleDecorator.Color = ppDecorator.Color;
+                }
+                titleDecorator.Position = createPoint(x, y);
+                this.log.info(`[${participant.name}] Обновлен заголовок 'Цель:'. Позиция: (${x}, ${y})`);
+            } else {
+                if (titleDecorator.Text !== "") titleDecorator.Text = "";
             }
-            const newPosition = createPoint(Math.floor(32 * castleX), Math.floor(32 * (castleY + titleOffsetY)));
-            titleDecorator.Position = newPosition;
-            this.log.info(`[${participant.name}] Обновлен заголовок 'Цель:'. Позиция: (${newPosition.X}, ${newPosition.Y})`);
         } else {
-            titleDecorator.Text = ""; // Скрываем, если цели нет
+            if (titleDecorator.Text !== "") {
+                titleDecorator.Text = ""; // Скрываем, если цели нет
+            }
             this.log.info(`[${participant.name}] Цели нет, заголовок скрыт.`);
         }
     
@@ -1093,12 +1201,19 @@ export class AutoFfaPlugin extends HordePluginBase {
             const memberDecorator = decorators[i + 1];
             if (i < targetMembers.length) {
                 const member = targetMembers[i];
-                memberDecorator.Text = member.name;
-                memberDecorator.Color = member.settlement.SettlementColor; // Уникальный цвет для каждого
                 const memberOffsetY = titleOffsetY + ((i + 1) * yOffsetPerLine);
-                const newPosition = createPoint(Math.floor(32 * castleX), Math.floor(32 * (castleY + memberOffsetY)));
-                memberDecorator.Position = newPosition;
-                this.log.info(`[${participant.name}] Обновлен декоратор для цели ${i + 1}/${targetMembers.length}: '${member.name}'. Позиция: (${newPosition.X}, ${newPosition.Y})`);
+                const x = Math.floor(32 * castleX);
+                const y = Math.floor(32 * (castleY + memberOffsetY));
+                const isVisible = y >= 0 && x >= 0 && x <= sceneWidthPx && y <= sceneHeightPx;
+
+                if (isVisible) {
+                    memberDecorator.Text = member.name;
+                    memberDecorator.Color = member.settlement.SettlementColor; // Уникальный цвет для каждого
+                    memberDecorator.Position = createPoint(x, y);
+                    this.log.info(`[${participant.name}] Обновлен декоратор для цели ${i + 1}/${targetMembers.length}: '${member.name}'. Позиция: (${x}, ${y})`);
+                } else {
+                    if (memberDecorator.Text !== "") memberDecorator.Text = "";
+                }
             } else {
                 // Скрываем неиспользуемые декораторы
                 if (memberDecorator.Text !== "") {
