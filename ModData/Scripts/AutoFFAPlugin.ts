@@ -1067,43 +1067,57 @@ export class AutoFfaPlugin extends HordePluginBase {
         const scena = ActiveScena.GetRealScena();
         const sceneWidthPx = scena.Size.Width * 32;
         const sceneHeightPx = scena.Size.Height * 32;
+        const topMargin = 5; // Небольшой отступ сверху
 
         for (const participant of Array.from(this.participants.values())) {
             const castle = participant.castle;
             if (!castle || castle.IsDead) continue;
 
-            this.updatePowerPointsDecorator(participant, sceneWidthPx, sceneHeightPx);
-            this.updateStatusDecorator(participant, sceneWidthPx, sceneHeightPx);
-            this.updateTargetDecorator(participant, sceneWidthPx, sceneHeightPx);
+            // --- Расчет сдвига по Y ---
+            const yOffsetPerLine = 0.5;
+            const baseOffsetY = -1.8;
+            const targetMemberCount = this.getTargetTeamMemberCount(participant);
+            const totalInfoBlockLines = 1 + (targetMemberCount > 0 ? 1 + targetMemberCount : 0);
+            const additionalLines = totalInfoBlockLines - 1;
+            const finalOffsetY = baseOffsetY - (additionalLines * yOffsetPerLine);
+            const topY = Math.floor(32 * (castle.Cell.Y + finalOffsetY));
+
+            let yShift = 0;
+            if (topY < 0) {
+                yShift = -topY + topMargin; // Сдвигаем блок вниз, чтобы он начинался с отступом
+            }
+            // --- Конец расчета сдвига ---
+
+            this.updatePowerPointsDecorator(participant, sceneWidthPx, sceneHeightPx, yShift);
+            this.updateStatusDecorator(participant, sceneWidthPx, sceneHeightPx); // Статус не является частью блока, не сдвигаем
+            this.updateTargetDecorator(participant, sceneWidthPx, sceneHeightPx, yShift);
             this.updateCastleFrame(participant);
         }
     }
 
-    private updatePowerPointsDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number): void {
+    private updatePowerPointsDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number, yShift: number): void {
         const decorator = this.powerPointDecorators.get(participant.id);
         if (decorator) {
-            const yOffsetPerLine = 0.5; // Вертикальное смещение на одну строку в единицах ячеек карты
-            const baseOffsetY = -1.8;   // Базовое смещение для верхнего декоратора в блоке
+            const yOffsetPerLine = 0.5;
+            const baseOffsetY = -1.8;
 
-            // Рассчитываем, сколько всего строк займет информационный блок (очки + цель)
             const targetMemberCount = this.getTargetTeamMemberCount(participant);
-            // 1 строка для очков + (если есть цель) 1 строка для заголовка "Цель:" + N строк для имен
             const totalInfoBlockLines = 1 + (targetMemberCount > 0 ? 1 + targetMemberCount : 0);
             
-            // Смещаем весь блок вверх на высоту дополнительных строк, чтобы он не "наезжал" на замок
             const additionalLines = totalInfoBlockLines - 1;
             const finalOffsetY = baseOffsetY - (additionalLines * yOffsetPerLine);
 
             const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
             const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
             const text = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
+            
             const x = 32 * (participant.castle.Cell.X - 1);
-            const y = Math.floor(32 * (participant.castle.Cell.Y + finalOffsetY));
+            const y = Math.floor(32 * (participant.castle.Cell.Y + finalOffsetY)) + yShift;
 
-            // Проверяем, находится ли позиция в пределах видимости сцены
-            if (y < 0 || x < 0 || x > sceneWidthPx || y > sceneHeightPx) {
+            // Проверяем, находится ли позиция в пределах видимости сцены (кроме верхнего края, который мы уже скорректировали)
+            if (x < 0 || x > sceneWidthPx || y > sceneHeightPx) {
                 if (decorator.Text !== "") {
-                    decorator.Text = ""; // Скрываем текст, если он за пределами экрана
+                    decorator.Text = "";
                 }
             } else {
                 decorator.Text = text;
@@ -1123,10 +1137,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             const x = Math.floor(32 * (participant.castle.Cell.X + 2.7));
             const y = Math.floor(32 * (participant.castle.Cell.Y + 3.6));
 
-            // Проверяем, находится ли позиция в пределах видимости сцены
             if (y < 0 || x < 0 || x > sceneWidthPx || y > sceneHeightPx) {
                 if (decorator.Text !== "") {
-                    decorator.Text = ""; // Скрываем текст, если он за пределами экрана
+                    decorator.Text = "";
                 }
             } else {
                 decorator.Text = statusText;
@@ -1135,7 +1148,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
     }
 
-    private updateTargetDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number): void {
+    private updateTargetDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number, yShift: number): void {
         if (!this.settings.enableTargetSystem) {
             return;
         }
@@ -1155,17 +1168,15 @@ export class AutoFfaPlugin extends HordePluginBase {
         const baseOffsetY = -1.8;
     
         const targetMemberCount = targetMembers.length;
-        // 1 строка для очков + (если есть цель) 1 строка для заголовка "Цель:" + N строк для имен
         const totalInfoBlockLines = 1 + (targetMemberCount > 0 ? 1 + targetMemberCount : 0);
         const additionalLines = totalInfoBlockLines - 1;
         
         const powerPointsOffsetY = baseOffsetY - (additionalLines * yOffsetPerLine);
-        // Позиция декоратора "Цель:" - на одну строку ниже
         const titleOffsetY = powerPointsOffsetY + yOffsetPerLine;
         
         const castleX = participant.castle.Cell.X - 1;
         const castleY = participant.castle.Cell.Y;
-        this.log.info(`[${participant.name}] Расчет позиций: totalInfoBlockLines=${totalInfoBlockLines}, titleOffsetY=${titleOffsetY.toFixed(2)}`);
+        this.log.info(`[${participant.name}] Расчет позиций: totalInfoBlockLines=${totalInfoBlockLines}, titleOffsetY=${titleOffsetY.toFixed(2)}, yShift=${yShift}`);
     
         // --- Обновление декораторов ---
         const maxDecorators = decorators.length;
@@ -1174,7 +1185,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         const titleDecorator = decorators[0];
         if (targetMembers.length > 0) {
             const x = Math.floor(32 * castleX);
-            const y = Math.floor(32 * (castleY + titleOffsetY));
+            const y = Math.floor(32 * (castleY + titleOffsetY)) + yShift;
             const isVisible = y >= 0 && x >= 0 && x <= sceneWidthPx && y <= sceneHeightPx;
 
             if (isVisible) {
@@ -1196,14 +1207,13 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
     
         // 2. Обновляем декораторы для каждого члена команды-цели (используем decorators[1] и далее)
-        // Отображаем до (maxDecorators - 1) целей
         for (let i = 0; i < maxDecorators - 1; i++) {
             const memberDecorator = decorators[i + 1];
             if (i < targetMembers.length) {
                 const member = targetMembers[i];
                 const memberOffsetY = titleOffsetY + ((i + 1) * yOffsetPerLine);
                 const x = Math.floor(32 * castleX);
-                const y = Math.floor(32 * (castleY + memberOffsetY));
+                const y = Math.floor(32 * (castleY + memberOffsetY)) + yShift;
                 const isVisible = y >= 0 && x >= 0 && x <= sceneWidthPx && y <= sceneHeightPx;
 
                 if (isVisible) {
