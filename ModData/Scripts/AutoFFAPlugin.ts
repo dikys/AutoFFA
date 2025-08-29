@@ -1270,11 +1270,12 @@ export class AutoFfaPlugin extends HordePluginBase {
     private createDecoratorsForParticipant(participant: FfaParticipant): void {
         const settlementColor = participant.settlement.SettlementColor;
         const textColor = createHordeColor(255, Math.min(255, settlementColor.R + 128), Math.min(255, settlementColor.G + 128), Math.min(255, settlementColor.B + 128));
-
+        
         const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
         const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
         const ppText = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
         const ppDecorator = spawnString(ActiveScena, ppText, createPoint(0, 0), 10 * 60 * 60 * 50);
+        ppDecorator.FogOfWarMode = HordeClassLibrary.World.Objects.VisualEffects.VisualEffectFogOfWarMode.Ignore;
         ppDecorator.Height = 22;
         ppDecorator.Color = textColor;
         ppDecorator.DrawLayer = DrawLayer.Birds;
@@ -1283,6 +1284,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         this.powerPointDecorators.set(participant.id, ppDecorator);
 
         const statusDecorator = spawnString(ActiveScena, participant.isSuzerain() ? "Сюзерен" : "Вассал", createPoint(0, 0), 10 * 60 * 60 * 50);
+        statusDecorator.FogOfWarMode = HordeClassLibrary.World.Objects.VisualEffects.VisualEffectFogOfWarMode.Ignore;
         statusDecorator.Height = 22;
         statusDecorator.Color = textColor;
         statusDecorator.DrawLayer = DrawLayer.Birds;
@@ -1296,6 +1298,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             const maxTargets = 17;
             for (let i = 0; i < maxTargets; i++) {
                 const targetDecorator = spawnString(ActiveScena, "", createPoint(0, 0), 10 * 60 * 60 * 50);
+                targetDecorator.FogOfWarMode = HordeClassLibrary.World.Objects.VisualEffects.VisualEffectFogOfWarMode.Ignore;
                 targetDecorator.Height = 22;
                 targetDecorator.DrawLayer = DrawLayer.Birds;
                 //@ts-ignore
@@ -1306,6 +1309,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
 
         const frame = this.createCastleFrame(participant);
+        frame.FogOfWarMode = HordeClassLibrary.World.Objects.VisualEffects.VisualEffectFogOfWarMode.Ignore;
         this.castleFrames.set(participant.id, frame);
     }
 
