@@ -137,7 +137,7 @@ export class Team {
             (prev.powerPoints > current.powerPoints) ? prev : current
         );
 
-        if (mostPowerfulMember.id !== this._suzerain.id) {
+        if (mostPowerfulMember.id !== this._suzerain.id && this._suzerain.powerPoints + 10 < mostPowerfulMember.powerPoints) {
             const oldSuzerain = this._suzerain;
             log.info(`[Команда ${this.id}] Смена власти! ${mostPowerfulMember.name} (${Math.round(mostPowerfulMember.powerPoints)} очков) становится новым сюзереном, смещая ${oldSuzerain.name} (${Math.round(oldSuzerain.powerPoints)} очков).`);
             this.changeSuzerain(mostPowerfulMember);
@@ -152,6 +152,7 @@ export class Team {
      * @returns {boolean} True, если ресурсы были распределены.
      */
     public distributeGenerosity(): boolean {
+        log.info("this._vassals.size = ", this._vassals.size);
         if (this._vassals.size === 0) return false;
 
         const suzerainRes = this._suzerain.settlement.Resources;

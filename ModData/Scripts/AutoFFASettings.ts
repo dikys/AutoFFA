@@ -25,10 +25,22 @@ export class AutoFFASettings {
     public weakenSnowballEffect: boolean = false;
 
     /** Коэффициент набора очков силы */
-    public powerPointPerHpCoeff: number = 0.005; 
+    public powerPointPerHpCoeff: number = 0.0025; 
 
     /** Коэффициент набора очков силы при максимальном удалении */
     public powerPointCoeffByMaxDistance: number = 3;
+
+    // ===============================================================
+    // ===                   БАЛАНС КОМАНД                         ===
+    // ===============================================================
+
+    /**
+     * Включить ли механику 'Вызов системе'.
+     * Позволяет вручную задать состав команд.
+     * Поселения с никами 'князъ' или 'повелитель' (без учета регистра)
+     * объединяются в одну команду, а все остальные - в другую.
+     */
+    public isChallengeSystemEnabled: boolean = true;
 
     // ===============================================================
     // ===                   НАЧАЛО ИГРЫ                           ===
@@ -55,7 +67,7 @@ export class AutoFFASettings {
     public bountyCheckIntervalTicks: number = 3000;
 
     /** Множитель очков влияния, получаемых при атаке игрока с "Наградой за голову". */
-    public bountyPowerPointsMultiplier: number = 2;
+    public bountyPowerPointsMultiplier: number = 3;
 
     /**
      * Включить ли механику "Цель".
@@ -70,7 +82,7 @@ export class AutoFFASettings {
      * Включить ли сообщения о результатах битвы.
      * Если игрок не получает очки силы в течение некоторого времени, ему придет сообщение с итогом.
      */
-    public enableBattleSummaryMessages: boolean = true;
+    public enableBattleSummaryMessages: boolean = false;
 
     /** Время в тиках, после которого битва считается оконченной, если не было получено новых очков силы (1 минута = 3000). */
     public battleSummaryTimeoutTicks: number = 3000;
