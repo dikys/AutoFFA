@@ -1068,6 +1068,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         const sceneWidthPx = scena.Size.Width * 32;
         const sceneHeightPx = scena.Size.Height * 32;
         const topMargin = 5; // Небольшой отступ сверху
+        const rightMargin = 5; // Небольшой отступ справа
 
         for (const participant of Array.from(this.participants.values())) {
             const castle = participant.castle;
@@ -1084,18 +1085,53 @@ export class AutoFfaPlugin extends HordePluginBase {
 
             let yShift = 0;
             if (topY < 0) {
-                yShift = -topY + topMargin; // Сдвигаем блок вниз, чтобы он начинался с отступом
+                yShift = -topY + topMargin; // Сдвигаем блок вниз
             }
-            // --- Конец расчета сдвига ---
 
-            this.updatePowerPointsDecorator(participant, sceneWidthPx, sceneHeightPx, yShift);
-            this.updateStatusDecorator(participant, sceneWidthPx, sceneHeightPx); // Статус не является частью блока, не сдвигаем
-            this.updateTargetDecorator(participant, sceneWidthPx, sceneHeightPx, yShift);
+            // --- Расчет сдвига по X ---
+            const x = 32 * (castle.Cell.X - 1);
+            const estimatedCharWidth = 11; // Приблизительная ширина символа для шрифта высотой 22
+            let longestLineLength = 0;
+
+            // Находим самую длинную строку в блоке для оценки ширины
+            const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
+            const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
+            const ppText = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
+            longestLineLength = ppText.length;
+
+            if (this.settings.enableTargetSystem) {
+                const target = participant.target;
+                const targetTeam = target ? this.teams.get(target.teamId) : null;
+                const targetMembers = targetTeam ? targetTeam.getMembers() : [];
+                if (targetMembers.length > 0) {
+                    if ("Цель:".length > longestLineLength) {
+                        longestLineLength = "Цель:".length;
+                    }
+                    for (const member of targetMembers) {
+                        if (member.name.length > longestLineLength) {
+                            longestLineLength = member.name.length;
+                        }
+                    }
+                }
+            }
+            
+            const estimatedWidth = longestLineLength * estimatedCharWidth;
+            let xShift = 0;
+            const rightEdge = x + estimatedWidth;
+            if (rightEdge > sceneWidthPx) {
+                xShift = sceneWidthPx - rightEdge - rightMargin; // Сдвигаем блок влево
+            }
+            
+            // --- Конец расчетов ---
+
+            this.updatePowerPointsDecorator(participant, sceneWidthPx, sceneHeightPx, yShift, xShift);
+            this.updateStatusDecorator(participant, sceneWidthPx, sceneHeightPx);
+            this.updateTargetDecorator(participant, sceneWidthPx, sceneHeightPx, yShift, xShift);
             this.updateCastleFrame(participant);
         }
     }
 
-    private updatePowerPointsDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number, yShift: number): void {
+    private updatePowerPointsDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number, yShift: number, xShift: number): void {
         const decorator = this.powerPointDecorators.get(participant.id);
         if (decorator) {
             const yOffsetPerLine = 0.5;
@@ -1111,11 +1147,10 @@ export class AutoFfaPlugin extends HordePluginBase {
             const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
             const text = `Сила: ${Math.round(participant.powerPoints)} (+${resourceReward} рес., +${peopleReward} чел.)`;
             
-            const x = 32 * (participant.castle.Cell.X - 1);
+            const x = 32 * (participant.castle.Cell.X - 1) + xShift;
             const y = Math.floor(32 * (participant.castle.Cell.Y + finalOffsetY)) + yShift;
 
-            // Проверяем, находится ли позиция в пределах видимости сцены (кроме верхнего края, который мы уже скорректировали)
-            if (x < 0 || x > sceneWidthPx || y > sceneHeightPx) {
+            if (x < 0 || y > sceneHeightPx) { // Проверяем только левую и нижнюю границы
                 if (decorator.Text !== "") {
                     decorator.Text = "";
                 }
@@ -1148,7 +1183,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
     }
 
-    private updateTargetDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number, yShift: number): void {
+    private updateTargetDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number, yShift: number, xShift: number): void {
         if (!this.settings.enableTargetSystem) {
             return;
         }
@@ -1174,19 +1209,19 @@ export class AutoFfaPlugin extends HordePluginBase {
         const powerPointsOffsetY = baseOffsetY - (additionalLines * yOffsetPerLine);
         const titleOffsetY = powerPointsOffsetY + yOffsetPerLine;
         
-        const castleX = participant.castle.Cell.X - 1;
-        const castleY = participant.castle.Cell.Y;
-        this.log.info(`[${participant.name}] Расчет позиций: totalInfoBlockLines=${totalInfoBlockLines}, titleOffsetY=${titleOffsetY.toFixed(2)}, yShift=${yShift}`);
+        const castleXCell = participant.castle.Cell.X - 1;
+        const castleYCell = participant.castle.Cell.Y;
+        this.log.info(`[${participant.name}] Расчет позиций: totalInfoBlockLines=${totalInfoBlockLines}, titleOffsetY=${titleOffsetY.toFixed(2)}, yShift=${yShift}, xShift=${xShift}`);
     
         // --- Обновление декораторов ---
         const maxDecorators = decorators.length;
     
-        // 1. Обновляем декоратор заголовка "Цель:" (используем decorators[0])
+        // 1. Обновляем декоратор заголовка "Цель:"
         const titleDecorator = decorators[0];
         if (targetMembers.length > 0) {
-            const x = Math.floor(32 * castleX);
-            const y = Math.floor(32 * (castleY + titleOffsetY)) + yShift;
-            const isVisible = y >= 0 && x >= 0 && x <= sceneWidthPx && y <= sceneHeightPx;
+            const x = Math.floor(32 * castleXCell) + xShift;
+            const y = Math.floor(32 * (castleYCell + titleOffsetY)) + yShift;
+            const isVisible = x >= 0 && y >= 0 && y <= sceneHeightPx;
 
             if (isVisible) {
                 titleDecorator.Text = "Цель:";
@@ -1195,44 +1230,34 @@ export class AutoFfaPlugin extends HordePluginBase {
                     titleDecorator.Color = ppDecorator.Color;
                 }
                 titleDecorator.Position = createPoint(x, y);
-                this.log.info(`[${participant.name}] Обновлен заголовок 'Цель:'. Позиция: (${x}, ${y})`);
             } else {
                 if (titleDecorator.Text !== "") titleDecorator.Text = "";
             }
         } else {
-            if (titleDecorator.Text !== "") {
-                titleDecorator.Text = ""; // Скрываем, если цели нет
-            }
-            this.log.info(`[${participant.name}] Цели нет, заголовок скрыт.`);
+            if (titleDecorator.Text !== "") titleDecorator.Text = "";
         }
     
-        // 2. Обновляем декораторы для каждого члена команды-цели (используем decorators[1] и далее)
+        // 2. Обновляем декораторы для членов команды-цели
         for (let i = 0; i < maxDecorators - 1; i++) {
             const memberDecorator = decorators[i + 1];
             if (i < targetMembers.length) {
                 const member = targetMembers[i];
                 const memberOffsetY = titleOffsetY + ((i + 1) * yOffsetPerLine);
-                const x = Math.floor(32 * castleX);
-                const y = Math.floor(32 * (castleY + memberOffsetY)) + yShift;
-                const isVisible = y >= 0 && x >= 0 && x <= sceneWidthPx && y <= sceneHeightPx;
+                const x = Math.floor(32 * castleXCell) + xShift;
+                const y = Math.floor(32 * (castleYCell + memberOffsetY)) + yShift;
+                const isVisible = x >= 0 && y >= 0 && y <= sceneHeightPx;
 
                 if (isVisible) {
                     memberDecorator.Text = member.name;
-                    memberDecorator.Color = member.settlement.SettlementColor; // Уникальный цвет для каждого
+                    memberDecorator.Color = member.settlement.SettlementColor;
                     memberDecorator.Position = createPoint(x, y);
-                    this.log.info(`[${participant.name}] Обновлен декоратор для цели ${i + 1}/${targetMembers.length}: '${member.name}'. Позиция: (${x}, ${y})`);
                 } else {
                     if (memberDecorator.Text !== "") memberDecorator.Text = "";
                 }
             } else {
-                // Скрываем неиспользуемые декораторы
-                if (memberDecorator.Text !== "") {
-                    memberDecorator.Text = "";
-                    this.log.info(`[${participant.name}] Скрыт неиспользуемый декоратор цели #${i + 1}.`);
-                }
+                if (memberDecorator.Text !== "") memberDecorator.Text = "";
             }
         }
-        this.log.info(`[${participant.name}] Обновление декоратора цели завершено.`);
     }
 
     private updateCastleFrame(participant: FfaParticipant): void {
