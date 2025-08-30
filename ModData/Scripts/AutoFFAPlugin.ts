@@ -94,7 +94,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             return;
         }
         // Проверяем окончание начального мирного периода
-        if (!this.settings.isChallengeSystemEnabled && this.initialPeaceEndTick > 0 && gameTickNum >= this.initialPeaceEndTick) {
+        if (this.initialPeaceEndTick > 0 && gameTickNum >= this.initialPeaceEndTick) {
             this.endInitialPeace();
             this.initialPeaceEndTick = 0; // Сбрасываем, чтобы не вызывать снова
         }
@@ -159,10 +159,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
 
         this.setupParticipantsAndTeams();
-        // Применяем механику "Вызов системе" один раз после инициализации
-        if (!this.settings.isChallengeSystemEnabled) {
-            this.setInitialDiplomacy();
-        }
+        this.setInitialDiplomacy();
         this.checkAndReassignTargets(); // Назначим начальные цели
         this.subscribeToEvents();
         this.updateDecorators();

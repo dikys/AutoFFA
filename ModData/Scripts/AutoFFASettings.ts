@@ -40,7 +40,7 @@ export class AutoFFASettings {
      * Поселения с никами 'князъ' или 'повелитель' (без учета регистра)
      * объединяются в одну команду, а все остальные - в другую.
      */
-    public isChallengeSystemEnabled: boolean = true;
+    public isChallengeSystemEnabled: boolean = false;
 
     // ===============================================================
     // ===                   НАЧАЛО ИГРЫ                           ===
