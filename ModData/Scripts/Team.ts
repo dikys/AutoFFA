@@ -129,6 +129,48 @@ export class Team {
     }
 
     /**
+     * Удаляет текущего сюзерена из команды.
+     * Если есть вассалы, самый сильный из них становится новым сюзереном.
+     * Если вассалов нет, команда считается расформированной.
+     */
+    public removeSuzerain(): void {
+        const oldSuzerain = this._suzerain;
+        log.info(`[Команда ${this.id}] Удаление сюзерена ${oldSuzerain.name}.`);
+
+        // Сбрасываем данные у старого сюзерена
+        oldSuzerain.teamId = -1;
+        oldSuzerain.suzerain = null;
+
+        if (this._vassals.size === 0) {
+            log.warning(`[Команда ${this.id}] Последний участник (сюзерен) удален. Команда будет расформирована.`);
+            // @ts-ignore
+            this._suzerain = null; // Помечаем, что сюзерена больше нет
+            return;
+        }
+
+        // Находим самого сильного вассала, чтобы он стал новым сюзереном
+        const newSuzerain = Array.from(this._vassals.values()).reduce((prev, current) =>
+            (prev.powerPoints > current.powerPoints) ? prev : current
+        );
+
+        log.info(`[Команда ${this.id}] ${newSuzerain.name} становится новым сюзереном.`);
+        broadcastMessage(`Сюзерен ${oldSuzerain.name} покинул свой пост! Новым сюзереном становится ${newSuzerain.name}.`, newSuzerain.settlement.SettlementColor);
+
+        // Обновляем команду
+        this._suzerain = newSuzerain;
+        this._vassals.delete(newSuzerain.id);
+
+        // Обновляем нового сюзерена
+        newSuzerain.suzerain = null;
+
+        // Обновляем остальных вассалов
+        for (const vassal of Array.from(this._vassals.values())) {
+            vassal.suzerain = newSuzerain;
+            vassal.target = newSuzerain.target; // Синхронизируем цель
+        }
+    }
+
+    /**
      * Проверяет, следует ли повысить более могущественного вассала до сюзерена.
      * @returns {boolean} True, если произошла смена сюзерена.
      */
@@ -304,7 +346,7 @@ export class Team {
     private setDiplomacyWithAll(otherTeams: Team[], status: DiplomacyStatus): void {
         for (const otherTeam of otherTeams) {
             if (this.id === otherTeam.id) continue;
-            log.info(`[Команда ${this.id}] Установка статуса '${DiplomacyStatus[status]}' с командой ${otherTeam.id}.`);
+            log.info(`[Команда ${this.id}] Установка статуса '${status}' с командой ${otherTeam.id}.`);
 
             for (const member of this.getMembers()) {
                 for (const otherMember of otherTeam.getMembers()) {

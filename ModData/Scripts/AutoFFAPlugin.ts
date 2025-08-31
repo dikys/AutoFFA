@@ -747,69 +747,31 @@ export class AutoFfaPlugin extends HordePluginBase {
 
             // Логика зависит от того, кто был побежден: сюзерен или вассал
             if (defeated.isSuzerain()) {
-                // =================================================
-                // === Сценарий: Побежден Сюзерен (вся команда) ===
-                // =================================================
-                if (this.settings.weakenSnowballEffect) {
-                    // --- НОВАЯ ЛОГИКА: ОСЛАБЛЕНИЕ СНЕЖНОГО КОМА ---
-                    this.log.info(`Сценарий: Сюзерен ${defeated.name} побежден ${winner.name}. Режим "Ослабление снежного кома" активен.`);
+                this.log.info(`Сценарий: Сюзерен ${defeated.name} (команда ${loserTeam.id}) побежден ${winner.name}. Вся команда (${loserTeam.getMembers().map(m => m.name).join(', ')}) переходит к победителю.`);
 
-                    // 1. Победитель забирает только сюзерена
-                    this.log.info(`Победитель ${winner.name} забирает сюзерена ${defeated.name} в качестве вассала.`);
-                    winnerTeam.shareSpoils(defeated, 0.20); // Трофеи за сюзерена
-                    winnerTeam.addVassal(defeated);
-                    newlyAcquiredParticipants.push(defeated);
-                    broadcastMessage(`${winner.name} победил сюзерена ${defeated.name} и сделал его своим вассалом!`, winnerTeam.suzerain.settlement.SettlementColor);
-
-                    // 2. Вассалы проигравшего становятся независимыми
-                    const formerVassals = loserTeam.vassals;
-                    this.log.info(`Вассалы (${formerVassals.map(v => v.name).join(', ') || 'нет'}) команды ${defeated.name} становятся независимыми.`);
-                    if (formerVassals.length > 0) {                        
-                        broadcastMessage(`Вассалы ${defeated.name} обретают независимость!`, loserTeam.suzerain.settlement.SettlementColor);
-                        for (const vassal of formerVassals) {
-                            // Каждый бывший вассал создает новую команду
-                            const newTeam = new Team(vassal.id, vassal, this.settings);
-                            this.teams.set(newTeam.id, newTeam);
-                            this.log.info(`Бывший вассал ${vassal.name} создал новую команду (id: ${newTeam.id}).`);
-                            
-                            // Объявляем войну всем существующим командам.
-                            const allOtherTeams = Array.from(this.teams.values()).filter(t => t.id !== newTeam.id);
-                            newTeam.setWarStatusWithAll(allOtherTeams);
-                        }
-                    }
-
-                    // 3. Удаляем старую команду
-                    this.log.info(`Удаляем старую команду ${defeated.name} (id: ${loserTeam.id}).`);
-                    this.teams.delete(loserTeam.id);
-
-                    // 4. Сбрасываем флаг поражения только для бывшего сюзерена
-                    defeated.isDefeated = false;
-
-                } else {
-                    // --- СТАРАЯ ЛОГИКА: ПОЛНОЕ ПОГЛОЩЕНИЕ ---
-                    this.log.info(`Сценарий: Сюзерен ${defeated.name} (команда ${loserTeam.id}) побежден ${winner.name}. Вся команда (${loserTeam.getMembers().map(m => m.name).join(', ')}) переходит к победителю.`);
-
-                    const allLosers = loserTeam.getMembers();
-                    for (const member of allLosers) {
-                        // Распределяем трофеи за каждого члена проигравшей команды
-                        const takenPercentage = member.isSuzerain() ? 0.20 : 0.10; // 20% за сюзерена, 10% за вассала
-                        winnerTeam.shareSpoils(member, takenPercentage);
-                    }
-
-                    // Перемещаем всех членов проигравшей команды в команду победителя
-                    this.log.info(`Перемещаем всех членов команды ${loserTeam.id} в команду ${winnerTeam.id}.`);
-                    winnerTeam.addSuzerainAndVassals(loserTeam.suzerain, loserTeam.vassals);
-                    newlyAcquiredParticipants.push(...allLosers);
-                    
-                    // Удаляем старую, теперь пустую, команду
-                    this.log.info(`Удаляем старую команду ${defeated.name} (id: ${loserTeam.id}).`);
-                    this.teams.delete(loserTeam.id);
-
-                    broadcastMessage(`${winner.name} разгромил королевство ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
-                    this.log.info(`Сбрасываем флаги поражения для всех членов бывшей команды ${defeated.name}.`);
-                    // Сбрасываем флаг поражения для всех, кто перешел
-                    allLosers.forEach(member => member.isDefeated = false);
+                const allLosers = [ loserTeam.suzerain ];
+                for (const member of allLosers) {
+                    // Распределяем трофеи за каждого члена проигравшей команды
+                    const takenPercentage = member.isSuzerain() ? 0.20 : 0.10; // 20% за сюзерена, 10% за вассала
+                    winnerTeam.shareSpoils(member, takenPercentage);
                 }
+
+                // Перемещаем всех членов проигравшей команды в команду победителя
+                this.log.info(`Перемещаем всех членов команды ${loserTeam.id} в команду ${winnerTeam.id}.`);
+                loserTeam.removeSuzerain();
+                winnerTeam.addVassal(allLosers[0]);
+                newlyAcquiredParticipants.push(...allLosers);
+                
+                // Удаляем старую, теперь пустую, команду
+                this.log.info(`Удаляем старую команду ${defeated.name} (id: ${loserTeam.id}).`);
+                if (!loserTeam.suzerain) {
+                    this.teams.delete(loserTeam.id);
+                }
+
+                broadcastMessage(`${winner.name} разгромил королевство ${defeated.name}! Команда проигравшего присоединяется к победителю.`, winnerTeam.suzerain.settlement.SettlementColor);
+                this.log.info(`Сбрасываем флаги поражения для всех членов бывшей команды ${defeated.name}.`);
+                // Сбрасываем флаг поражения для всех, кто перешел
+                allLosers.forEach(member => member.isDefeated = false);
             } else {
                 // =================================================
                 // === Сценарий: Побежден Вассал (один участник) ===
