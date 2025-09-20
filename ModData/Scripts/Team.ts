@@ -75,6 +75,14 @@ export class Team {
         return this.getMembers().reduce((sum, member) => sum + member.getCurrentPower(), 0);
     }
 
+    /**
+     * Рассчитывает общую мощь команды по очкам силы.
+     * @returns {number} Суммарные очки силы всех членов команды.
+     */
+    public getTotalPowerPoints(): number {
+        return this.getMembers().reduce((sum, member) => sum + member.powerPoints, 0);
+    }
+
     // ==================================================================================================
     // Публичные методы
     // ==================================================================================================

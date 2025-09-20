@@ -75,7 +75,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         super("Auto FFA (OOP)");
         this.settings = settings;
         this.initialPowerPointsExchangeSetting = this.settings.enablePowerPointsExchange;
-        this.log.logLevel = LogLevel.Info; // Включаем подробное логирование по умолчанию
+        this.log.logLevel = LogLevel.Warning; // Включаем подробное логирование по умолчанию
     }
 
     // ==================================================================================================
@@ -241,7 +241,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             DiplomacyManager.establishPeaceAmongAll(allParticipants);
         } else {
             for (let i = 0; i < allParticipants.length; i++) {
-                for (let j = i + 1; j < allParticipants.length; j++) {
+                for (let j = i + 1; j < allParticipants.length; j++) { 
                     DiplomacyManager.setDiplomacy(allParticipants[i], allParticipants[j], DiplomacyStatus.War);
                 }
             }
@@ -269,7 +269,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
         const challengerTeamName = challengers.map(p => p.name).join(' и ');
         broadcastMessage(
-            `Игроки ${challengerTeamName} бросили вызов системе и будут наказаны!`,
+            `Игроки ${challengerTeamName} бросили вызов системе и будут наказаны!`, 
             createHordeColor(255, 255, 100, 100)
         );
         this.log.info(`Запуск 'Вызова системе'. Челленджеры: ${challengerTeamName}. Остальные: ${others.map(p => p.name).join(', ')}.`);
@@ -612,7 +612,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
                 if (battlePoints > 0) {
                     const message = createGameMessageWithSound(
-                        `В результате последней битвы вы заработали ${battlePoints} очков силы.`,
+                        `В результате последней битвы вы заработали ${battlePoints} очков силы.`, 
                         participant.settlement.SettlementColor
                     );
                     participant.settlement.Messages.AddMessage(message);
@@ -931,19 +931,29 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
         this.log.info("Проверка необходимости создания коалиций.");
 
-        const dominantTeam = this.findDominantTeam();
-        if (!dominantTeam) {
-            this.log.info("Доминирующая команда не найдена, коалиция не требуется.");
-            return; // Нет доминирующей команды, коалиция не нужна.
+        const strongestTeam = this.findStrongestTeam();
+        if (!strongestTeam) {
+            this.log.info("Не удалось найти сильнейшую команду.");
+            return;
         }
 
-        const otherTeams = Array.from(this.teams.values()).filter(t => t.id !== dominantTeam.id);
+        const otherTeams = Array.from(this.teams.values()).filter(t => t.id !== strongestTeam.id);
         if (otherTeams.length <= 1) {
-            this.log.info(`Доминирующая команда ${dominantTeam.suzerain.name} есть, но недостаточно других команд для создания коалиции.`);
-            return; // Не с кем объединяться или коалиция уже сформирована.
+            this.log.info(`Сильнейшая команда ${strongestTeam.suzerain.name} есть, но недостаточно других команд для создания коалиции.`);
+            return;
+        }
+        
+        const strongestTeamPower = strongestTeam.getPower();
+        const coalitionPower = otherTeams.reduce((sum, team) => sum + team.getPower(), 0);
+        
+        const powerThreshold = strongestTeamPower * (1 + this.settings.maxStrengthDifferenceForCoalitionPercent / 100);
+
+        if (coalitionPower > powerThreshold) {
+            this.log.info(`Коалиция против ${strongestTeam.suzerain.name} не формируется, так как их суммарная сила (${coalitionPower.toFixed(0)}) превышает пороговое значение (${powerThreshold.toFixed(0)}).`);
+            return;
         }
 
-        this.log.info(`Обнаружена доминирующая команда ${dominantTeam.suzerain.name}. Формируется коалиция.`);
+        this.log.info(`Обнаружена сильнейшая команда ${strongestTeam.suzerain.name}. Формируется коалиция.`);
 
         // 1. Находим сильнейшего сюзерена среди остальных для лидерства в коалиции.
         const coalitionLeaderTeam = otherTeams.reduce((prev, current) => 
@@ -959,30 +969,40 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
 
         // 3. Устанавливаем дипломатию для новой коалиции.
-        coalitionLeaderTeam.setWarStatusWithAll([dominantTeam]);
+        coalitionLeaderTeam.setWarStatusWithAll([strongestTeam]);
 
         // 4. Принудительно назначаем цели: коалиция против доминатора.
-        this.log.info(`Принудительное назначение целей после формирования коалиции: ${coalitionLeaderTeam.suzerain.name} vs ${dominantTeam.suzerain.name}.`);
-        this.assignNewTargetForTeam(coalitionLeaderTeam, dominantTeam);
-        this.assignNewTargetForTeam(dominantTeam, coalitionLeaderTeam);
+        this.log.info(`Принудительное назначение целей после формирования коалиции: ${coalitionLeaderTeam.suzerain.name} vs ${strongestTeam.suzerain.name}.`);
+        this.assignNewTargetForTeam(coalitionLeaderTeam, strongestTeam);
+        this.assignNewTargetForTeam(strongestTeam, coalitionLeaderTeam);
 
         // 5. Сообщаем всем игрокам.
         broadcastMessage(
-            `Команда ${dominantTeam.suzerain.name} стала слишком сильной! ` + 
-            `Остальные игроки объединились в коалицию под предводительством ${coalitionLeaderTeam.suzerain.name}, чтобы дать отпор!`,
+            `Игроки объединились в коалицию под предводительством ${coalitionLeaderTeam.suzerain.name}, чтобы дать отпор сильнейшей команде ${strongestTeam.suzerain.name}!`, 
             coalitionLeaderTeam.suzerain.settlement.SettlementColor
         );
 
     }
 
-    private findDominantTeam(): Team | null {
-        const totalPlayers = this.participants.size;
-        for (const team of Array.from(this.teams.values())) {
-            if (team.getMemberCount() >= totalPlayers / 2) {
-                return team;
+    private findStrongestTeam(): Team | null {
+        const allTeams = Array.from(this.teams.values());
+        if (allTeams.length < 2) {
+            return null;
+        }
+
+        let strongestTeam: Team | null = null;
+        let maxPower = -1;
+
+        // Находим самую сильную команду
+        for (const team of allTeams) {
+            const teamPower = team.getPower();
+            if (teamPower > maxPower) {
+                maxPower = teamPower;
+                strongestTeam = team;
             }
         }
-        return null;
+
+        return strongestTeam;
     }
 
     private processPowerPointRewards(gameTickNum: number): void {
