@@ -59,7 +59,8 @@ export class FfaParticipant {
         this.settings = settings;
 
         const settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Model");
-        this.nextRewardTime = settlementCensusModel.TaxAndSalaryUpdatePeriod;
+        //this.nextRewardTime = settlementCensusModel.TaxAndSalaryUpdatePeriod;
+        this.nextRewardTime = this.settlement.Census.TicksToNextTaxAndSalary;
 
         log.info(`[${this.name}] Участник создан. Начальная позиция замка: ${this.initialCastlePosition.X},${this.initialCastlePosition.Y}.`);
     }
@@ -241,8 +242,9 @@ export class FfaParticipant {
             this.totalPointsFromGenerosity = 0;
         }
 
-        const settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Model");
-        this.nextRewardTime += settlementCensusModel.TaxAndSalaryUpdatePeriod;
+        //let settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Data");
+        //this.nextRewardTime += settlementCensusModel.TaxAndSalaryUpdatePeriod;
+        this.nextRewardTime += this.settlement.Census.TicksToNextTaxAndSalary;
         log.info(`[${this.name}] Следующее время награды обновлено на ${this.nextRewardTime}.`);
 
         if (this.powerPoints < 10) {

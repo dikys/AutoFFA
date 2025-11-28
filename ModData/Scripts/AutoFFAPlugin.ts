@@ -3,7 +3,7 @@ import HordePluginBase from "plugins/base-plugin";
 import { log, LogLevel } from "library/common/logging";
 import { broadcastMessage, createGameMessageWithSound } from "library/common/messages";
 import { createHordeColor, createPoint } from "library/common/primitives";
-import { BattleController, DiplomacyStatus, DrawLayer, FontUtils, GeometryCanvas, GeometryVisualEffect, Stride_Color, Stride_Vector2, StringVisualEffect } from "library/game-logic/horde-types";
+import { DiplomacyStatus, DrawLayer, FontUtils, GeometryCanvas, GeometryVisualEffect, Stride_Color, Stride_Vector2, StringVisualEffect } from "library/game-logic/horde-types";
 import { isReplayMode } from "library/game-logic/game-tools";
 import { spawnGeometry, spawnString } from "library/game-logic/decoration-spawn";
 import { FfaParticipant } from "./FfaParticipant";
@@ -418,7 +418,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
             if (this.settings.enableBattleSummaryMessages) {
                 attacker.currentBattlePowerPoints += deltaPoints;
-                attacker.lastPowerPointGainTick = BattleController.GameTimer.GameFramesCounter;
+                attacker.lastPowerPointGainTick = Battle.GameTimer.GameFramesCounter;
             }
         }
     }
@@ -461,7 +461,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         this.log.info("Проверка и переназначение целей...");
 
         const allTeams = Array.from(this.teams.values());
-        const gameTickNum = BattleController.GameTimer.GameFramesCounter;
+        const gameTickNum = Battle.GameTimer.GameFramesCounter;
         const randomizer = ActiveScena.GetRealScena().Context.Randomizer;
 
         // Собираем команды, которые не находятся в состоянии мира
@@ -541,24 +541,45 @@ export class AutoFfaPlugin extends HordePluginBase {
             }
         }
 
-        // 4. Перемешиваем и создаем новые пары
-        this.log.info("Этап 4: Перемешивание и создание новых пар.");
-        for (let i = teamsToReassign.length - 1; i > 0; i--) {
-            const j = randomizer.RandomNumber(0, i);
-            [teamsToReassign[i], teamsToReassign[j]] = [teamsToReassign[j], teamsToReassign[i]];
-        }
-        this.log.info(`Порядок команд после перемешивания: ${teamsToReassign.map(t => t.suzerain.name).join(', ')}.`);
+        // 4. Создаем новые пары на основе ближайшего расстояния
+        this.log.info("Этап 4: Создание новых пар по ближайшему расстоянию.");
 
-        while (teamsToReassign.length >= 2) {
-            const teamA = teamsToReassign.pop()!;
-            const teamB = teamsToReassign.pop()!;
-            this.log.info(`Создаем новую пару: ${teamA.suzerain.name} vs ${teamB.suzerain.name}.`);
-            this.assignNewTargetForTeam(teamA, teamB);
-            this.assignNewTargetForTeam(teamB, teamA);
+        const pairs: { teamA: Team, teamB: Team, distance: number }[] = [];
+        for (let i = 0; i < teamsToReassign.length; i++) {
+            for (let j = i + 1; j < teamsToReassign.length; j++) {
+                const teamA = teamsToReassign[i];
+                const teamB = teamsToReassign[j];
+                const distance = chebyshevDistance(
+                    teamA.suzerain.castle.Cell.X,
+                    teamA.suzerain.castle.Cell.Y,
+                    teamB.suzerain.castle.Cell.X,
+                    teamB.suzerain.castle.Cell.Y
+                );
+                pairs.push({ teamA, teamB, distance });
+            }
         }
 
-        if (teamsToReassign.length === 1) {
-            this.log.info(`Осталась одна команда без пары: ${teamsToReassign[0].suzerain.name}. Она будет ждать следующего цикла.`);
+        // Сортируем пары по возрастанию расстояния
+        pairs.sort((a, b) => a.distance - b.distance);
+
+        const pairedTeamIds = new Set<number>();
+        for (const pair of pairs) {
+            if (pairedTeamIds.has(pair.teamA.id) || pairedTeamIds.has(pair.teamB.id)) {
+                continue; // Одна из команд уже в паре
+            }
+
+            this.log.info(`Создаем новую пару: ${pair.teamA.suzerain.name} vs ${pair.teamB.suzerain.name} (расстояние: ${pair.distance.toFixed(0)}).`);
+            this.assignNewTargetForTeam(pair.teamA, pair.teamB);
+            this.assignNewTargetForTeam(pair.teamB, pair.teamA);
+
+            pairedTeamIds.add(pair.teamA.id);
+            pairedTeamIds.add(pair.teamB.id);
+        }
+
+        // Проверяем, остались ли команды без пары
+        const unpairedTeams = teamsToReassign.filter(team => !pairedTeamIds.has(team.id));
+        if (unpairedTeams.length > 0) {
+            this.log.info(`Остались команды без пары: ${unpairedTeams.map(t => t.suzerain.name).join(', ')}. Они будут ждать следующего цикла.`);
         }
 
         this.log.info("Переназначение целей завершено.");
@@ -1242,7 +1263,7 @@ export class AutoFfaPlugin extends HordePluginBase {
     private updateCastleFrame(participant: FfaParticipant): void {
         const frame = this.castleFrames.get(participant.id);
         if (frame) {
-            frame.Position = participant.castle.Position;
+            frame.Position = participant.castle.Position.ToPoint2D();
         }
     }
 
@@ -1307,7 +1328,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         const color = participant.settlement.SettlementColor;
         geometryCanvas.DrawPolyLine(points, new Stride_Color(color.R, color.G, color.B), 3.0, false);
 
-        return spawnGeometry(ActiveScena, geometryCanvas.GetBuffers(), participant.castle.Position, 10 * 60 * 60 * 50);
+        return spawnGeometry(ActiveScena, geometryCanvas.GetBuffers(), participant.castle.Position.ToPoint2D(), 10 * 60 * 60 * 50);
     }
 
     private displayInitialMessages(gameTickNum: number): void {
@@ -1336,7 +1357,7 @@ export class AutoFfaPlugin extends HordePluginBase {
                 message += "\t- Вызов системе: Игроки с никами 'князъ' или 'повелитель' объединяются против всех остальных.\n";
             }
             if (this.settings.enableTargetSystem) {
-                message += "\t- Цели: Командам назначаются симметричные цели. Атакуйте назначенную команду для получения бонусных очков.\n";
+                message += "\t- Цели: Командам назначаются цели по принципу ближайшего соседа. Атакуйте назначенную команду для получения бонусных очков.\n";
             }
             if (this.settings.enableBountyOnLeader) {
                 message += "\t- Награда за голову: Атакуйте лидера по очкам для получения бонуса.\n";

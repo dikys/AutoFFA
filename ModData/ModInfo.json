@@ -5,5 +5,7 @@
   "Authors": "Dikysa",
   "BuiltIn": false,
   "StandAlone": false,
-  "Params": null
+  "Params": null,
+  "GameVersion": "0.79pre",
+  "ModVersion": "0.03"
 }
