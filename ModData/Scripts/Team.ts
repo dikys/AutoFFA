@@ -280,6 +280,7 @@ export class Team {
         const distributedPower = defeated.powerPoints * takenPercentage;
         log.info(`[Команда ${this.id}] Распределение трофеев за победу над ${defeated.name}. Всего очков для распределения: ${Math.round(distributedPower)}.`);
         defeated.powerPoints -= distributedPower;
+        defeated.totalPointsLostFromDefeat += distributedPower;
 
         const members = this.getMembers();
         const totalDamage = members.reduce((sum, member) => sum + Math.max(1, member.damageDealtTo.get(defeated.id) || 0), 0);

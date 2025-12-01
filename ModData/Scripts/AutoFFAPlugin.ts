@@ -408,6 +408,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
         if (deltaPoints > 0) {
             attacker.powerPoints += deltaPoints;
+            attacker.totalPointsFromAttacks += deltaPoints;
             // Урон для распределения трофеев (очков) всегда учитывается
             attacker.damageDealtTo.set(victim.id, (attacker.damageDealtTo.get(victim.id) || 0) + deltaPoints);
 

@@ -35,6 +35,14 @@ export class FfaParticipant {
     public nextRewardTime: number;
     public totalPointsFromTribute: number = 0;
     public totalPointsFromGenerosity: number = 0;
+    public totalPointsFromAttacks: number = 0;
+    public totalPointsLostFromDefeat: number = 0;
+
+    public globalTotalPointsFromTribute: number = 0;
+    public globalTotalPointsFromGenerosity: number = 0;
+    public globalTotalPointsFromAttacks: number = 0;
+    public globalTotalPointsLostFromDefeat: number = 0;
+
 
     // ==================================================================================================
     // Private properties
@@ -218,29 +226,46 @@ export class FfaParticipant {
      */
     public givePowerPointReward(): boolean {
         log.info(`[${this.name}] Проверка наград за очки силы. Текущие очки: ${Math.round(this.powerPoints)}`);
-        if (this.settings.enablePowerPointsExchange) {
-            // Сообщение об обмене очками
-            let exchangeSummary = "";
-            if (Math.abs(this.totalPointsFromTribute) >= 1) {
-                const action = this.totalPointsFromTribute > 0 ? "Получено" : "Потрачено";
-                const points = Math.round(Math.abs(this.totalPointsFromTribute));
-                exchangeSummary += `${action} ${points} очков в качестве платы за верность. `;
-            }
-            if (Math.abs(this.totalPointsFromGenerosity) >= 1) {
-                const action = this.totalPointsFromGenerosity > 0 ? "Получено" : "Потрачено";
-                const points = Math.round(Math.abs(this.totalPointsFromGenerosity));
-                exchangeSummary += `${action} ${points} очков в благодарность за щедрость.`;
-            }
-
-            if (exchangeSummary) {
-                log.info(`[${this.name}] Сводка по обмену очками: ${exchangeSummary.trim()}`);
-                const msg = createGameMessageWithSound(exchangeSummary.trim(), this.settlement.SettlementColor);
-                this.settlement.Messages.AddMessage(msg);
-            }
-
-            this.totalPointsFromTribute = 0;
-            this.totalPointsFromGenerosity = 0;
+        
+        // Сообщение об изменении очков
+        let summaryParts: string[] = [];
+        if (this.totalPointsFromAttacks >= 1) {
+            summaryParts.push(`Заработано в бою: ${Math.round(this.totalPointsFromAttacks)}`);
         }
+        if (this.totalPointsLostFromDefeat >= 1) {
+            summaryParts.push(`Потеряно при поражении: ${Math.round(this.totalPointsLostFromDefeat)}`);
+        }
+        if (this.settings.enablePowerPointsExchange) {
+            if (this.totalPointsFromTribute >= 1) {
+                summaryParts.push(`Получено за верность: ${Math.round(this.totalPointsFromTribute)}`);
+            } else if (this.totalPointsFromTribute <= -1) {
+                summaryParts.push(`Потрачено на дань: ${Math.round(Math.abs(this.totalPointsFromTribute))}`);
+            }
+            if (this.totalPointsFromGenerosity >= 1) {
+                summaryParts.push(`Получено за щедрость: ${Math.round(this.totalPointsFromGenerosity)}`);
+            } else if (this.totalPointsFromGenerosity <= -1) {
+                summaryParts.push(`Потрачено на благодарность: ${Math.round(Math.abs(this.totalPointsFromGenerosity))}`);
+            }
+        }
+
+        if (summaryParts.length > 0) {
+            const summaryMessage = "Изменение очков силы: " + summaryParts.join(', ') + ".";
+            log.info(`[${this.name}] Сводка по очкам: ${summaryMessage}`);
+            const msg = createGameMessageWithSound(summaryMessage, this.settlement.SettlementColor);
+            this.settlement.Messages.AddMessage(msg);
+        }
+
+        // Суммируем в глобальные счетчики
+        this.globalTotalPointsFromTribute += this.totalPointsFromTribute;
+        this.globalTotalPointsFromGenerosity += this.totalPointsFromGenerosity;
+        this.globalTotalPointsFromAttacks += this.totalPointsFromAttacks;
+        this.globalTotalPointsLostFromDefeat += this.totalPointsLostFromDefeat;
+
+        // Сбрасываем счетчики
+        this.totalPointsFromTribute = 0;
+        this.totalPointsFromGenerosity = 0;
+        this.totalPointsFromAttacks = 0;
+        this.totalPointsLostFromDefeat = 0;
 
         //let settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Data");
         //this.nextRewardTime += settlementCensusModel.TaxAndSalaryUpdatePeriod;
