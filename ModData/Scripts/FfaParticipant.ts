@@ -36,12 +36,14 @@ export class FfaParticipant {
     public totalPointsFromTribute: number = 0;
     public totalPointsFromGenerosity: number = 0;
     public totalPointsFromAttacks: number = 0;
+    public totalPointsFromCaptures: number = 0;
     public totalPointsLostFromDefeat: number = 0;
 
-    public globalTotalPointsFromTribute: number = 0;
-    public globalTotalPointsFromGenerosity: number = 0;
-    public globalTotalPointsFromAttacks: number = 0;
-    public globalTotalPointsLostFromDefeat: number = 0;
+    public prevTotalPointsFromTribute: number = 0;
+    public prevTotalPointsFromGenerosity: number = 0;
+    public prevTotalPointsFromAttacks: number = 0;
+    public prevTotalPointsLostFromDefeat: number = 0;
+    public prevTotalPointsFromCaptures: number = 0;
 
 
     // ==================================================================================================
@@ -227,24 +229,34 @@ export class FfaParticipant {
     public givePowerPointReward(): boolean {
         log.info(`[${this.name}] Проверка наград за очки силы. Текущие очки: ${Math.round(this.powerPoints)}`);
         
+        // Рассчитываем дельту с прошлого вызова
+        const deltaAttacks = this.totalPointsFromAttacks - this.prevTotalPointsFromAttacks;
+        const deltaDefeat = this.totalPointsLostFromDefeat - this.prevTotalPointsLostFromDefeat;
+        const deltaTribute = this.totalPointsFromTribute - this.prevTotalPointsFromTribute;
+        const deltaCaptures = this.totalPointsFromCaptures - this.prevTotalPointsFromCaptures;
+        const deltaGenerosity = this.totalPointsFromGenerosity - this.prevTotalPointsFromGenerosity;
+
         // Сообщение об изменении очков
         let summaryParts: string[] = [];
-        if (this.totalPointsFromAttacks >= 1) {
-            summaryParts.push(`Заработано в бою: ${Math.round(this.totalPointsFromAttacks)}`);
+        if (deltaAttacks >= 1) {
+            summaryParts.push(`Заработано в бою: ${Math.round(deltaAttacks)}`);
         }
-        if (this.totalPointsLostFromDefeat >= 1) {
-            summaryParts.push(`Потеряно при поражении: ${Math.round(this.totalPointsLostFromDefeat)}`);
+        if (deltaCaptures >= 1) {
+            summaryParts.push(`Получено за захваты: ${Math.round(deltaCaptures)}`);
+        }
+        if (deltaDefeat >= 1) {
+            summaryParts.push(`Потеряно при поражении: ${Math.round(deltaDefeat)}`);
         }
         if (this.settings.enablePowerPointsExchange) {
-            if (this.totalPointsFromTribute >= 1) {
-                summaryParts.push(`Получено за верность: ${Math.round(this.totalPointsFromTribute)}`);
-            } else if (this.totalPointsFromTribute <= -1) {
-                summaryParts.push(`Потрачено на дань: ${Math.round(Math.abs(this.totalPointsFromTribute))}`);
+            if (deltaTribute >= 1) {
+                summaryParts.push(`Получено за верность: ${Math.round(deltaTribute)}`);
+            } else if (deltaTribute <= -1) {
+                summaryParts.push(`Потрачено на дань: ${Math.round(Math.abs(deltaTribute))}`);
             }
-            if (this.totalPointsFromGenerosity >= 1) {
-                summaryParts.push(`Получено за щедрость: ${Math.round(this.totalPointsFromGenerosity)}`);
-            } else if (this.totalPointsFromGenerosity <= -1) {
-                summaryParts.push(`Потрачено на благодарность: ${Math.round(Math.abs(this.totalPointsFromGenerosity))}`);
+            if (deltaGenerosity >= 1) {
+                summaryParts.push(`Получено за щедрость: ${Math.round(deltaGenerosity)}`);
+            } else if (deltaGenerosity <= -1) {
+                summaryParts.push(`Потрачено на благодарность: ${Math.round(Math.abs(deltaGenerosity))}`);
             }
         }
 
@@ -255,17 +267,12 @@ export class FfaParticipant {
             this.settlement.Messages.AddMessage(msg);
         }
 
-        // Суммируем в глобальные счетчики
-        this.globalTotalPointsFromTribute += this.totalPointsFromTribute;
-        this.globalTotalPointsFromGenerosity += this.totalPointsFromGenerosity;
-        this.globalTotalPointsFromAttacks += this.totalPointsFromAttacks;
-        this.globalTotalPointsLostFromDefeat += this.totalPointsLostFromDefeat;
-
-        // Сбрасываем счетчики
-        this.totalPointsFromTribute = 0;
-        this.totalPointsFromGenerosity = 0;
-        this.totalPointsFromAttacks = 0;
-        this.totalPointsLostFromDefeat = 0;
+        // Обновляем предыдущие значения текущими для следующего цикла
+        this.prevTotalPointsFromTribute = this.totalPointsFromTribute;
+        this.prevTotalPointsFromGenerosity = this.totalPointsFromGenerosity;
+        this.prevTotalPointsFromAttacks = this.totalPointsFromAttacks;
+        this.prevTotalPointsLostFromDefeat = this.totalPointsLostFromDefeat;
+        this.prevTotalPointsFromCaptures = this.totalPointsFromCaptures;
 
         //let settlementCensusModel = ScriptUtils.GetValue(this.settlement.Census, "Data");
         //this.nextRewardTime += settlementCensusModel.TaxAndSalaryUpdatePeriod;

@@ -290,6 +290,7 @@ export class Team {
             const damageShare = Math.max(1, member.damageDealtTo.get(defeated.id) || 0) / totalDamage;
             const gain = distributedPower * damageShare;
             member.powerPoints += gain;
+            member.totalPointsFromCaptures += gain;
             log.info(`[Команда ${this.id}] -> ${member.name} получает ${Math.round(gain)} очков (доля урона: ${Math.round(damageShare * 100)}%).`);
 
             const msg = createGameMessageWithSound(`За победу над ${defeated.name} вам начислено ${Math.round(gain)} очков силы (ваша доля составляет ${Math.round(damageShare * 100)} %).`, member.settlement.SettlementColor);

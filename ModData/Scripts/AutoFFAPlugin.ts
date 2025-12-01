@@ -56,6 +56,7 @@ export class AutoFfaPlugin extends HordePluginBase {
     private statusDecorators: Map<number, StringVisualEffect> = new Map();
     private targetDecorators: Map<number, StringVisualEffect[]> = new Map();
     private castleFrames: Map<number, GeometryVisualEffect> = new Map();
+    private globalStatsDecorators: Map<number, StringVisualEffect[]> = new Map();
 
     private isGameFinished = false;
     private readonly settings: AutoFFASettings;
@@ -1129,6 +1130,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             this.updateStatusDecorator(participant, sceneWidthPx, sceneHeightPx);
             this.updateTargetDecorator(participant, sceneWidthPx, sceneHeightPx, yShift, xShift);
             this.updateCastleFrame(participant);
+            this.updateGlobalStatsDecorator(participant, sceneWidthPx, sceneHeightPx);
         }
     }
 
@@ -1261,6 +1263,66 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
     }
 
+    private updateGlobalStatsDecorator(participant: FfaParticipant, sceneWidthPx: number, sceneHeightPx: number): void {
+        const decorators = this.globalStatsDecorators.get(participant.id);
+        if (!decorators) {
+            return;
+        }
+
+        const stats: { label: string, value: number, color?: Stride_Color }[] = [];
+        const textColor = createHordeColor(255, 220, 220, 220); // Светло-серый для текста
+
+        // Формируем строки статистики, только если значение не равно нулю
+        if (participant.totalPointsFromTribute !== 0) {
+            const value = Math.round(participant.totalPointsFromTribute);
+            stats.push({ label: ` За верность: ${value > 0 ? '+' : ''}${value}`, value: value, color: createHordeColor(255, 173, 216, 230) }); // Светло-голубой
+        }
+        if (participant.totalPointsFromGenerosity !== 0) {
+            const value = Math.round(participant.totalPointsFromGenerosity);
+            stats.push({ label: ` За щедрость: ${value > 0 ? '+' : ''}${value}`, value: value, color: createHordeColor(255, 255, 215, 0) }); // Золотой
+        }
+        if (participant.totalPointsFromAttacks > 0) {
+            const value = Math.round(participant.totalPointsFromAttacks);
+            stats.push({ label: `    За атаку: +${value}`, value: value, color: createHordeColor(255, 144, 238, 144) }); // Светло-зеленый
+        }
+        if (participant.totalPointsFromCaptures > 0) {
+            const value = Math.round(participant.totalPointsFromCaptures);
+            stats.push({ label: `  За захваты: +${value}`, value: value, color: createHordeColor(255, 255, 165, 0) }); // Оранжевый
+        }
+        if (participant.totalPointsLostFromDefeat > 0) {
+            const value = Math.round(participant.totalPointsLostFromDefeat);
+            stats.push({ label: `За поражения: -${value}`, value: -value, color: createHordeColor(255, 255, 100, 100) });
+        }
+
+        // Сортируем для консистентности
+        stats.sort((a, b) => b.value - a.value);
+
+        const yOffsetPerLine = 0.5;
+        const baseOffsetY = -1.8;
+        const castleXCell = participant.castle.Cell.X + participant.castle.Cfg.Size.Width + 1; // Справа от замка
+        const castleYCell = participant.castle.Cell.Y + 1;
+
+        for (let i = 0; i < decorators.length; i++) {
+            const decorator = decorators[i];
+            if (i < stats.length) {
+                const stat = stats[i];
+                const x = Math.floor(32 * castleXCell);
+                const y = Math.floor(32 * (castleYCell + baseOffsetY + (i * yOffsetPerLine)));
+                const isVisible = x >= 0 && y >= 0 && y <= sceneHeightPx && x <= sceneWidthPx;
+
+                if (isVisible) {
+                    decorator.Text = stat.label;
+                    decorator.Color = stat.color || textColor;
+                    decorator.Position = createPoint(x, y);
+                } else {
+                    if (decorator.Text !== "") decorator.Text = "";
+                }
+            } else {
+                if (decorator.Text !== "") decorator.Text = "";
+            }
+        }
+    }
+
     private updateCastleFrame(participant: FfaParticipant): void {
         const frame = this.castleFrames.get(participant.id);
         if (frame) {
@@ -1308,6 +1370,20 @@ export class AutoFfaPlugin extends HordePluginBase {
             }
             this.targetDecorators.set(participant.id, decorators);
         }
+
+        // Создаем декораторы для глобальной статистики
+        const statsDecorators: StringVisualEffect[] = [];
+        const maxStatsLines = 5; // 5 видов статистики
+        for (let i = 0; i < maxStatsLines; i++) {
+            const statsDecorator = spawnString(ActiveScena, "", createPoint(0, 0), 10 * 60 * 60 * 50);
+            statsDecorator.FogOfWarMode = HordeClassLibrary.World.Objects.VisualEffects.VisualEffectFogOfWarMode.Ignore;
+            statsDecorator.Height = 22;
+            statsDecorator.DrawLayer = DrawLayer.Birds;
+            //@ts-ignore
+            statsDecorator.Font = FontUtils.DefaultVectorFont;
+            statsDecorators.push(statsDecorator);
+        }
+        this.globalStatsDecorators.set(participant.id, statsDecorators);
 
         const frame = this.createCastleFrame(participant);
         frame.FogOfWarMode = HordeClassLibrary.World.Objects.VisualEffects.VisualEffectFogOfWarMode.Ignore;
