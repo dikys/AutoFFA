@@ -260,11 +260,13 @@ export class FfaParticipant {
             }
         }
 
-        if (summaryParts.length > 0) {
-            const summaryMessage = "Изменение очков силы: " + summaryParts.join(', ') + ".";
-            log.info(`[${this.name}] Сводка по очкам: ${summaryMessage}`);
-            const msg = createGameMessageWithSound(summaryMessage, this.settlement.SettlementColor);
-            this.settlement.Messages.AddMessage(msg);
+        if (this.settings.enablePowerPointsChangeSummary) {
+            if (summaryParts.length > 0) {
+                const summaryMessage = "Изменение очков силы: " + summaryParts.join(', ') + ".";
+                log.info(`[${this.name}] Сводка по очкам: ${summaryMessage}`);
+                const msg = createGameMessageWithSound(summaryMessage, this.settlement.SettlementColor);
+                this.settlement.Messages.AddMessage(msg);
+            }
         }
 
         // Обновляем предыдущие значения текущими для следующего цикла
