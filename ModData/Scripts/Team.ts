@@ -277,8 +277,18 @@ export class Team {
      * @param {number} takenPercentage - Процент забираемых очков силы.
      */
     public shareSpoils(defeated: FfaParticipant, takenPercentage: number): void {
-        const distributedPower = defeated.powerPoints * takenPercentage;
-        log.info(`[Команда ${this.id}] Распределение трофеев за победу над ${defeated.name}. Всего очков для распределения: ${Math.round(distributedPower)}.`);
+        let distributedPower = defeated.powerPoints * takenPercentage;
+        log.info(`[Команда ${this.id}] Распределение трофеев за победу над ${defeated.name}. Рассчитано очков: ${Math.round(distributedPower)}.`);
+
+        // Новая логика: ограничение максимального количества очков
+        if (this.settings.limitSpoilsOfWar) {
+            const maxSpoils = this.settings.initialPowerPoints * this.settings.maxSpoilsOfWarPercentage;
+            if (distributedPower > maxSpoils) {
+                log.info(`[Команда ${this.id}] Ограничение трофеев. Максимум: ${Math.round(maxSpoils)}. Очки скорректированы.`);
+                distributedPower = maxSpoils;
+            }
+        }
+
         defeated.powerPoints -= distributedPower;
         defeated.totalPointsLostFromDefeat += distributedPower;
 

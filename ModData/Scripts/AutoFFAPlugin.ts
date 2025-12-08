@@ -1451,6 +1451,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             if (this.settings.enableBattleSummaryMessages) {
                 message += "\t- Итоги битвы: Получайте сводку о заработанных очках после боя.\n";
             }
+            if (this.settings.limitSpoilsOfWar) {
+                message += `\t- Ограничение трофеев: Максимальное количество очков за победу ограничено (${this.settings.maxSpoilsOfWarPercentage * 100}% от начальных).\n`;
+            }
             if (this.settings.enableInitialPeacePeriod) {
                 message += `\t- Начальный мир: ${this.settings.initialPeaceDurationTicks / 50 / 60} минут на развитие.\n`;
             }
