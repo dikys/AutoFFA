@@ -311,12 +311,15 @@ export class FfaParticipant {
      * @returns {number} Общее значение мощи.
      */
     public getCurrentPower(): number {
-        let power = this.settlement.Resources.Gold + this.settlement.Resources.Metal + this.settlement.Resources.Lumber + 50 * this.settlement.Resources.FreePeople;
+        let power = 0.0; //this.settlement.Resources.Gold + this.settlement.Resources.Metal + this.settlement.Resources.Lumber + 50 * this.settlement.Resources.FreePeople;
 
         // Этот паттерн перечисления является стандартным для API игры.
         let enumerator = this.settlement.Units.GetEnumerator();
         while(enumerator.Current && enumerator.MoveNext()) {
             const unitCost = enumerator.Current.Cfg.CostResources;
+            if (!enumerator.Current.Cfg.MainArmament) {
+                continue;
+            }
             power += unitCost.Gold + unitCost.Metal + unitCost.Lumber + (50 * unitCost.People);
         }
         enumerator.Dispose();

@@ -14,10 +14,10 @@ export class AutoFFASettings {
     public temporaryPeaceDurationTicks: number = 3000;
 
     /** Включить ли механику коалиций против доминирующей команды. */
-    public enableCoalitionsAgainstLeader: boolean = false;
+    public enableCoalitionsAgainstLeader: boolean = true;
 
     /** Максимальная разница в силе (в процентах), при которой возможно объединение в коалицию. */
-    public maxStrengthDifferenceForCoalitionPercent: number = 20;
+    public maxStrengthDifferenceForCoalitionPercent: number = 30;
 
     /** 
      * Включить ли ослабление эффекта "снежного кома".
