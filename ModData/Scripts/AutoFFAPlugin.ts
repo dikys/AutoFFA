@@ -40,6 +40,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         BATTLE_SUMMARY_CHECK: 98,
         GAME_END_CHECK: 99,
         COALITION_CHECK: 97,
+        TEAM_REBALANCE: 49,
     };
 
     // ==================================================================================================
@@ -66,6 +67,7 @@ export class AutoFfaPlugin extends HordePluginBase {
     private initialPeaceEndTick = 0; // Тик, когда закончится начальный мир
     private readonly initialPowerPointsExchangeSetting: boolean;
     private powerExchangeTemporarilyDisabled: boolean = false;
+    private nextTeamRebalanceTick = 0;
     //private challengeSystemApplied = false; // Флаг, чтобы механика применилась лишь раз
 
     // ==================================================================================================
@@ -76,7 +78,7 @@ export class AutoFfaPlugin extends HordePluginBase {
         super("Auto FFA (OOP)");
         this.settings = settings;
         this.initialPowerPointsExchangeSetting = this.settings.enablePowerPointsExchange;
-        this.log.logLevel = LogLevel.Warning; // Включаем подробное логирование по умолчанию
+        this.log.logLevel = LogLevel.Info; // Включаем подробное логирование по умолчанию
     }
 
     // ==================================================================================================
@@ -117,6 +119,7 @@ export class AutoFfaPlugin extends HordePluginBase {
             case this.TICK_OFFSET.BATTLE_SUMMARY_CHECK: this.checkBattleSummaries(gameTickNum); break;
             case this.TICK_OFFSET.GAME_END_CHECK: this.checkForGameEnd(); break;
             case this.TICK_OFFSET.COALITION_CHECK: this.manageCoalitions(); break;
+            case this.TICK_OFFSET.TEAM_REBALANCE: this.rebalanceTeamsByPower(gameTickNum); break;
         }
     }
 
@@ -163,11 +166,25 @@ export class AutoFfaPlugin extends HordePluginBase {
         this.setInitialDiplomacy();
         this.checkAndReassignTargets(); // Назначим начальные цели
         this.subscribeToEvents();
-        this.updateDecorators();
-        if (this.settings.isChallengeSystemEnabled) {
+
+        if (this.settings.enableTeamBalancing) {
+            this.log.info("Включена механика балансировки команд.");
+            this.settings.vassalResourceLimit *= 2;
+            this.settings.vassalPopulationLimit *= 2;
+            this.settings.powerPointsRewardPercentage *= 3;
+            this.log.info(`Новые параметры: vassalResourceLimit=${this.settings.vassalResourceLimit}, vassalPopulationLimit=${this.settings.vassalPopulationLimit}, powerPointsRewardPercentage=${this.settings.powerPointsRewardPercentage}`);
+            this.initializeTeamBalancing();
+            this.nextTeamRebalanceTick = 10 * 60 * 50; // Первая перебалансировка через 10 минут
+        } else if (this.settings.isChallengeSystemEnabled) {
             this.applyChallengeSystemBalance();
-            this.checkAndReassignTargets();
-            this.updateDecorators(); // Немедленно обновляем UI, чтобы отразить новую структуру команд
+        }
+
+        // Обновляем UI после всех изменений в командах
+        this.checkAndReassignTargets();
+        this.updateDecorators();
+
+        if (this.settings.enableTeamBalancing && this.settings.isChallengeSystemEnabled) {
+            this.log.warning("Включены 'enableTeamBalancing' и 'isChallengeSystemEnabled'. Приоритет отдан 'enableTeamBalancing'.");
         }
 
         if (this.settings.enableInitialPeacePeriod) {
@@ -247,6 +264,63 @@ export class AutoFfaPlugin extends HordePluginBase {
                 }
             }
         }
+    }
+
+    private initializeTeamBalancing(): void {
+        this.log.info("Начальная расстановка команд по географическому принципу.");
+        const allParticipants = Array.from(this.participants.values());
+        if (allParticipants.length < 2) {
+            this.log.warning("Недостаточно игроков для разделения на команды.");
+            return;
+        }
+
+        // 1. Находим двух самых дальних друг от друга игроков, чтобы сделать их лидерами команд
+        let leaderA: FfaParticipant | null = null;
+        let leaderB: FfaParticipant | null = null;
+        let maxDist = -1;
+
+        for (let i = 0; i < allParticipants.length; i++) {
+            for (let j = i + 1; j < allParticipants.length; j++) {
+                const p1 = allParticipants[i];
+                const p2 = allParticipants[j];
+                const dist = chebyshevDistance(p1.castle.Cell.X, p1.castle.Cell.Y, p2.castle.Cell.Y, p2.castle.Cell.Y);
+                if (dist > maxDist) {
+                    maxDist = dist;
+                    leaderA = p1;
+                    leaderB = p2;
+                }
+            }
+        }
+
+        if (!leaderA || !leaderB) {
+            this.log.error("КРИТИЧЕСКАЯ ОШИБКА: Не удалось выбрать лидеров команд.");
+            return;
+        }
+
+        const teamA = this.teams.get(leaderA.id)!;
+        const teamB = this.teams.get(leaderB.id)!;
+        this.log.info(`Лидеры команд: ${leaderA.name} (Команда A) и ${leaderB.name} (Команда B).`);
+
+        // 2. Распределяем остальных игроков по командам в зависимости от близости к лидеру
+        for (const participant of allParticipants) {
+            if (participant.id === leaderA.id || participant.id === leaderB.id) {
+                continue;
+            }
+
+            const distToA = chebyshevDistance(participant.castle.Cell.X, participant.castle.Cell.Y, leaderA.castle.Cell.X, leaderA.castle.Cell.Y);
+            const distToB = chebyshevDistance(participant.castle.Cell.X, participant.castle.Cell.Y, leaderB.castle.Cell.X, leaderB.castle.Cell.Y);
+
+            const oldTeamId = participant.teamId;
+            if (distToA <= distToB) {
+                teamA.addVassal(participant);
+                this.log.info(`Игрок ${participant.name} присоединяется к команде A (${leaderA.name}).`);
+            } else {
+                teamB.addVassal(participant);
+                this.log.info(`Игрок ${participant.name} присоединяется к команде B (${leaderB.name}).`);
+            }
+            this.teams.delete(oldTeamId);
+        }
+        this.log.info(`Начальное формирование команд завершено. Всего команд: ${this.teams.size}.`);
     }
 
     private applyChallengeSystemBalance(): void {
@@ -1028,6 +1102,132 @@ export class AutoFfaPlugin extends HordePluginBase {
         return strongestTeam;
     }
 
+    private rebalanceTeamsByPower(gameTickNum: number): void {
+        if (!this.settings.enableTeamBalancing || gameTickNum < this.nextTeamRebalanceTick) {
+            return;
+        }
+        this.log.info("Начинаем перебалансировку команд по силе.");
+        this.nextTeamRebalanceTick = gameTickNum + 5 * 60 * 50; // Следующая через 5 минут
+
+        const currentTeams = Array.from(this.teams.values());
+        if (currentTeams.length !== 2) {
+            this.log.warning(`Перебалансировка отменена: количество команд не равно 2 (текущее: ${currentTeams.length}).`);
+            return;
+        }
+
+        const team1 = currentTeams[0];
+        const team2 = currentTeams[1];
+
+        const power1 = team1.getPower();
+        const power2 = team2.getPower();
+
+        let strongerTeam: Team, weakerTeam: Team;
+        let strongerPower: number, weakerPower: number;
+
+        if (power1 > power2) {
+            strongerTeam = team1;
+            weakerTeam = team2;
+            strongerPower = power1;
+            weakerPower = power2;
+        } else {
+            strongerTeam = team2;
+            weakerTeam = team1;
+            strongerPower = power2;
+            weakerPower = power1;
+        }
+
+        const powerDiff = strongerPower - weakerPower;
+        this.log.info(`Сила команд: ${team1.suzerain.name} (${Math.round(power1)}), ${team2.suzerain.name} (${Math.round(power2)}). Разница: ${Math.round(powerDiff)}.`);
+
+        if (powerDiff < 0.1 * (strongerPower + weakerPower)) { // Не балансируем, если разница меньше 10% от общей
+            this.log.info("Разница в силе незначительна, перебалансировка не требуется.");
+            return;
+        }
+
+        const candidates = strongerTeam.getMembers().filter(p => !p.isSuzerain()); // Не перемещаем сюзерена
+        if (candidates.length === 0) {
+            this.log.info("В сильной команде нет кандидатов (вассалов) для перемещения.");
+            return;
+        }
+
+        let bestCombination: FfaParticipant[] = [];
+        let bestNewDiff = powerDiff;
+
+        // Ищем лучшую комбинацию из 1-4 игроков для перемещения
+        const maxPlayersToMove = Math.min(4, candidates.length);
+        for (let k = 1; k <= maxPlayersToMove; k++) {
+            // Это упрощенный перебор. Для k > 2 может быть медленным, но для 4 игроков это приемлемо.
+            // Функция для генерации комбинаций
+            const combinations = (arr: FfaParticipant[], size: number): FfaParticipant[][] => {
+                const result: FfaParticipant[][] = [];
+                function combo(start: number, current: FfaParticipant[]) {
+                    if (current.length === size) {
+                        result.push([...current]);
+                        return;
+                    }
+                    for (let i = start; i < arr.length; i++) {
+                        current.push(arr[i]);
+                        combo(i + 1, current);
+                        current.pop();
+                    }
+                }
+                combo(0, []);
+                return result;
+            };
+
+            const combos = combinations(candidates, k);
+            for (const combination of combos) {
+                const combinationPower = combination.reduce((sum, p) => sum + p.getCurrentPower(), 0);
+                const newDiff = Math.abs(powerDiff - 2 * combinationPower);
+                if (newDiff < bestNewDiff) {
+                    bestNewDiff = newDiff;
+                    bestCombination = combination;
+                }
+            }
+        }
+
+        if (bestCombination.length > 0) {
+            const combinationPower = bestCombination.reduce((sum, p) => sum + p.getCurrentPower(), 0);
+            this.log.info(`Найдена лучшая комбинация для балансировки: ${bestCombination.map(p => p.name).join(', ')} (общая сила ${Math.round(combinationPower)}). Новая разница: ${Math.round(bestNewDiff)}.`);
+            broadcastMessage(`Происходит перебалансировка команд для поддержания равновесия сил!`, createHordeColor(255, 200, 200, 100));
+
+            for (const playerToMove of bestCombination) {
+                this.transferParticipant(playerToMove, strongerTeam, weakerTeam);
+            }
+            this.checkAndReassignTargets(); // Обновляем цели после изменения состава команд
+        } else {
+            this.log.info("Не удалось найти подходящую комбинацию для улучшения баланса.");
+        }
+    }
+
+    /**
+     * Перемещает участника из одной команды в другую с корректным обновлением дипломатии.
+     * @param participant Участник для перемещения.
+     * @param fromTeam Команда, из которой перемещается участник.
+     * @param toTeam Команда, в которую перемещается участник.
+     */
+    private transferParticipant(participant: FfaParticipant, fromTeam: Team, toTeam: Team): void {
+        this.log.info(`Перемещаем ${participant.name} из команды ${fromTeam.suzerain.name} в команду ${toTeam.suzerain.name}.`);
+
+        // 1. Удаляем из старой команды
+        fromTeam.removeVassal(participant);
+
+        // 2. Добавляем в новую команду
+        toTeam.addVassal(participant);
+
+        // 3. Устанавливаем войну со всеми членами старой команды
+        this.log.info(`Устанавливаем войну между ${participant.name} и членами его бывшей команды.`);
+        for (const oldTeammate of fromTeam.getMembers()) {
+            DiplomacyManager.setDiplomacy(participant, oldTeammate, DiplomacyStatus.War);
+        }
+
+        // 4. Устанавливаем союз со всеми членами новой команды (addVassal уже делает это, но для надежности)
+        this.log.info(`Устанавливаем союз между ${participant.name} и членами его новой команды.`);
+        for (const newTeammate of toTeam.getMembers()) {
+            DiplomacyManager.setDiplomacy(participant, newTeammate, DiplomacyStatus.Alliance);
+        }
+    }
+
     private processPowerPointRewards(gameTickNum: number): void {
         this.log.info("Начинаем обработку наград за очки силы.");
         let rewardsGivenCount = 0;
@@ -1045,7 +1245,36 @@ export class AutoFfaPlugin extends HordePluginBase {
     }
 
     private checkForGameEnd(): void {
-        if (this.teams.size === 1 && !this.isGameFinished) {
+        if (this.isGameFinished) {
+            return;
+        }
+
+        if (this.settings.victoryByPowerPoints) {
+            // Условие победы: набор определенного количества очков
+            let winner: FfaParticipant | null = null;
+            for (const participant of Array.from(this.participants.values())) {
+                if (participant.powerPoints >= this.settings.powerPointsForVictory) {
+                    winner = participant;
+                    break;
+                }
+            }
+
+            if (winner) {
+                this.log.info(`Обнаружено условие окончания игры: ${winner.name} набрал ${this.settings.powerPointsForVictory} очков силы.`);
+                this.isGameFinished = true;
+                broadcastMessage(`${winner.name} достиг вершины могущества и становится победителем!`, winner.settlement.SettlementColor);
+
+                for (const p of Array.from(this.participants.values())) {
+                    if (p.id === winner.id) {
+                        p.settlement.Existence.ForceVictory();
+                    } else {
+                        p.settlement.Existence.ForceTotalDefeat();
+                    }
+                }
+            }
+        }
+        if (this.teams.size === 1) {
+            // Условие победы: осталась одна команда
             this.log.info("Обнаружено условие окончания игры: осталась одна команда.");
             this.isGameFinished = true;
             const winnerTeam = this.teams.values().next().value as Team;
@@ -1275,19 +1504,19 @@ export class AutoFfaPlugin extends HordePluginBase {
         // Формируем строки статистики, только если значение не равно нулю
         if (participant.totalPointsFromTribute !== 0) {
             const value = Math.round(participant.totalPointsFromTribute);
-            stats.push({ label: ` За верность: ${value > 0 ? '+' : ''}${value}`, value: value, color: createHordeColor(255, 173, 216, 230) }); // Светло-голубой
+            stats.push({ label: `За верность: ${value > 0 ? '+' : ''}${value}`, value: value, color: createHordeColor(255, 173, 216, 230) }); // Светло-голубой
         }
         if (participant.totalPointsFromGenerosity !== 0) {
             const value = Math.round(participant.totalPointsFromGenerosity);
-            stats.push({ label: ` За щедрость: ${value > 0 ? '+' : ''}${value}`, value: value, color: createHordeColor(255, 255, 215, 0) }); // Золотой
+            stats.push({ label: `За щедрость: ${value > 0 ? '+' : ''}${value}`, value: value, color: createHordeColor(255, 255, 215, 0) }); // Золотой
         }
         if (participant.totalPointsFromAttacks > 0) {
             const value = Math.round(participant.totalPointsFromAttacks);
-            stats.push({ label: `    За атаку: +${value}`, value: value, color: createHordeColor(255, 144, 238, 144) }); // Светло-зеленый
+            stats.push({ label: `За атаку: +${value}`, value: value, color: createHordeColor(255, 144, 238, 144) }); // Светло-зеленый
         }
         if (participant.totalPointsFromCaptures > 0) {
             const value = Math.round(participant.totalPointsFromCaptures);
-            stats.push({ label: `  За захваты: +${value}`, value: value, color: createHordeColor(255, 255, 165, 0) }); // Оранжевый
+            stats.push({ label: `За захваты: +${value}`, value: value, color: createHordeColor(255, 255, 165, 0) }); // Оранжевый
         }
         if (participant.totalPointsLostFromDefeat > 0) {
             const value = Math.round(participant.totalPointsLostFromDefeat);
@@ -1433,6 +1662,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             if (this.settings.isChallengeSystemEnabled) {
                 message += "\t- Вызов системе: Игроки с никами 'князъ' или 'повелитель' объединяются против всех остальных.\n";
             }
+            if (this.settings.enableTeamBalancing) {
+                message += "\t- Балансировка команд: Игроки делятся на 2 команды по географическому принципу и периодически балансируются по силе.\n";
+            }
             if (this.settings.enableTargetSystem) {
                 message += "\t- Цели: Командам назначаются цели по принципу ближайшего соседа. Атакуйте назначенную команду для получения бонусных очков.\n";
             }
@@ -1456,6 +1688,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             }
             if (this.settings.enableInitialPeacePeriod) {
                 message += `\t- Начальный мир: ${this.settings.initialPeaceDurationTicks / 50 / 60} минут на развитие.\n`;
+            }
+            if (this.settings.victoryByPowerPoints) {
+                message += `\t- Цель игры: Первым набрать ${this.settings.powerPointsForVictory} очков силы.\n`;
             }
         } else if (gameTickNum === 50 * 95) {
             message = "Правила объявлены. Да начнется битва!";
