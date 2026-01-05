@@ -67,7 +67,10 @@ export class AutoFfaPlugin extends HordePluginBase {
     private initialPeaceEndTick = 0; // Тик, когда закончится начальный мир
     private readonly initialPowerPointsExchangeSetting: boolean;
     private powerExchangeTemporarilyDisabled: boolean = false;
+    private mapSizeCoefficient: number = 1.0;
     private nextTeamRebalanceTick = 0;
+    private hasSent30sRebalanceWarning = false;
+    private hasSent10sRebalanceWarning = false;
     //private challengeSystemApplied = false; // Флаг, чтобы механика применилась лишь раз
 
     // ==================================================================================================
@@ -158,6 +161,10 @@ export class AutoFfaPlugin extends HordePluginBase {
         var scenaHeight = ActiveScena.GetRealScena().Size.Height;
         this.mapLinearSize = Math.sqrt(2)*Math.sqrt(scenaWidth * scenaHeight);
         if (this.mapLinearSize <= 1) {
+            // Рассчитываем коэффициент размера карты для динамических таймеров
+            const mapArea = scenaWidth * scenaHeight;
+            const baseMapArea = 128 * 128; // Принимаем 128x128 за стандартный размер
+            this.mapSizeCoefficient = mapArea / baseMapArea;
             this.log.warning(`Не удалось определить размер карты (${this.mapLinearSize}), множитель за расстояние может работать некорректно. Установлено значение по умолчанию 256.`);
             this.mapLinearSize = 100; // Fallback
         }
@@ -173,8 +180,8 @@ export class AutoFfaPlugin extends HordePluginBase {
             this.settings.vassalPopulationLimit *= 2;
             this.settings.powerPointsRewardPercentage *= 3;
             this.log.info(`Новые параметры: vassalResourceLimit=${this.settings.vassalResourceLimit}, vassalPopulationLimit=${this.settings.vassalPopulationLimit}, powerPointsRewardPercentage=${this.settings.powerPointsRewardPercentage}`);
-            this.initializeTeamBalancing();
-            this.nextTeamRebalanceTick = 10 * 60 * 50; // Первая перебалансировка через 10 минут
+            this.initializeTeamBalancing(); // Первая перебалансировка через 10 минут
+            this.nextTeamRebalanceTick = this.calculateNextRebalanceInterval(true);
         } else if (this.settings.isChallengeSystemEnabled) {
             this.applyChallengeSystemBalance();
         }
@@ -196,6 +203,33 @@ export class AutoFfaPlugin extends HordePluginBase {
         }
 
         this.log.info(`Инициализация завершена. Найдено ${this.participants.size} участников.`);
+    }
+
+    /**
+     * Рассчитывает следующий интервал для перебалансировки команд в тиках.
+     * Интервал зависит от размера карты и является случайным в заданных пределах.
+     * @param isInitial - Если true, используется удвоенный интервал для первой перебалансировки.
+     * @returns Количество тиков до следующей перебалансировки.
+     */
+    private calculateNextRebalanceInterval(isInitial: boolean = false): number {
+        // Базовые значения для карты 128x128 (в минутах)
+        const baseMinMinutes = 2.5;
+        const baseMaxMinutes = 7.5;
+
+        // Рассчитываем интервалы для текущей карты
+        let minMinutes = baseMinMinutes * this.mapSizeCoefficient;
+        let maxMinutes = baseMaxMinutes * this.mapSizeCoefficient;
+
+        // Для первой перебалансировки удваиваем интервал
+        if (isInitial) {
+            minMinutes *= 2;
+            maxMinutes *= 2;
+        }
+
+        const randomMinutes = ActiveScena.GetRealScena().Context.Randomizer.RandomNumber(minMinutes, maxMinutes);
+        const ticks = Math.round(randomMinutes * 60 * 50);
+        this.log.info(`Следующая перебалансировка через ${randomMinutes.toFixed(1)} мин (${ticks} тиков). Начальная: ${isInitial}. Коэфф. карты: ${this.mapSizeCoefficient.toFixed(2)}`);
+        return ticks;
     }
 
     private setupParticipantsAndTeams(): void {
@@ -1103,12 +1137,32 @@ export class AutoFfaPlugin extends HordePluginBase {
     }
 
     private rebalanceTeamsByPower(gameTickNum: number): void {
-        if (!this.settings.enableTeamBalancing || gameTickNum < this.nextTeamRebalanceTick) {
+        if (!this.settings.enableTeamBalancing) {
+            return;
+        }
+
+        const ticksUntilRebalance = this.nextTeamRebalanceTick - gameTickNum;
+        const thirtySecondsInTicks = 30 * 50;
+        const tenSecondsInTicks = 10 * 50;
+
+        // Отправляем предупреждения
+        if (ticksUntilRebalance > tenSecondsInTicks && ticksUntilRebalance <= thirtySecondsInTicks && !this.hasSent30sRebalanceWarning) {
+            broadcastMessage("Внимание! Перебалансировка команд произойдет через 30 секунд!", createHordeColor(255, 255, 165, 0));
+            this.hasSent30sRebalanceWarning = true;
+            this.log.info("Отправлено предупреждение о перебалансировке за 30 секунд.");
+        } else if (ticksUntilRebalance > 0 && ticksUntilRebalance <= tenSecondsInTicks && !this.hasSent10sRebalanceWarning) {
+            broadcastMessage("Приготовьтесь! Перебалансировка команд через 10 секунд!", createHordeColor(255, 255, 69, 0));
+            this.hasSent10sRebalanceWarning = true;
+            this.log.info("Отправлено предупреждение о перебалансировке за 10 секунд.");
+        }
+
+        if (gameTickNum < this.nextTeamRebalanceTick) {
             return;
         }
         this.log.info("Начинаем перебалансировку команд по силе.");
-        this.nextTeamRebalanceTick = gameTickNum + 5 * 60 * 50; // Следующая через 5 минут
-
+        this.nextTeamRebalanceTick = gameTickNum + this.calculateNextRebalanceInterval();
+        this.hasSent30sRebalanceWarning = false;
+        this.hasSent10sRebalanceWarning = false;
         const currentTeams = Array.from(this.teams.values());
         if (currentTeams.length !== 2) {
             this.log.warning(`Перебалансировка отменена: количество команд не равно 2 (текущее: ${currentTeams.length}).`);

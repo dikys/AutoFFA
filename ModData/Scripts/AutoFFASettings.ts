@@ -12,7 +12,7 @@ export class AutoFFASettings {
      * Если true, игра заканчивается, когда один из игроков набирает `powerPointsForVictory` очков.
      * Если false, игра заканчивается, когда остается одна команда.
      */
-    public victoryByPowerPoints: boolean = true;
+    public victoryByPowerPoints: boolean = false;
 
     /** Количество очков силы, необходимое для победы, если включено `victoryByPowerPoints`. */
     public powerPointsForVictory: number = 10000;
@@ -83,7 +83,7 @@ export class AutoFFASettings {
      * 2. Периодически происходит перебалансировка сил путем перемещения игроков.
      * 3. Экономические параметры вассалов и награды за очки силы увеличены.
      */
-    public enableTeamBalancing: boolean = true;
+    public enableTeamBalancing: boolean = false;
 
     // ===============================================================
     // ===                   НАЧАЛО ИГРЫ                           ===

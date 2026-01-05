@@ -208,7 +208,9 @@ export class FfaParticipant {
         spawnParams.Direction = UnitDirection.RightDown;
 
         for (let pos = generator.next(); !pos.done; pos = generator.next()) {
-            if (unitCanBePlacedByRealMap(this.castleConfig, pos.value.X, pos.value.Y)) {
+            // Y+1 проверяем, чтобы была свободна точка постройки юнитов
+            if (unitCanBePlacedByRealMap(this.castleConfig, pos.value.X, pos.value.Y) ||
+                unitCanBePlacedByRealMap(this.castleConfig, pos.value.X, pos.value.Y + 1)) {
                 spawnParams.Cell = createPoint(pos.value.X, pos.value.Y);
                 const newCastle = this.settlement.Units.SpawnUnit(spawnParams);
 
