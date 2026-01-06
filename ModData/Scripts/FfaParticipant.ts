@@ -1,5 +1,5 @@
 import { Settlement, Unit, UnitConfig, UnitDirection, UnitCommand } from "library/game-logic/horde-types";
-import { createResourcesAmount, ResourcesAmount, Point2D, createPoint } from "library/common/primitives";
+import { createHordeColor, createResourcesAmount, ResourcesAmount, Point2D, createPoint } from "library/common/primitives";
 import { createGameMessageWithSound } from "library/common/messages";
 import { generateCellInSpiral } from "library/common/position-tools";
 import { unitCanBePlacedByRealMap } from "library/game-logic/unit-and-map";
@@ -44,6 +44,8 @@ export class FfaParticipant {
     public prevTotalPointsFromAttacks: number = 0;
     public prevTotalPointsLostFromDefeat: number = 0;
     public prevTotalPointsFromCaptures: number = 0;
+
+    public strengthPointsCoefficient: number = 1.0;
 
 
     // ==================================================================================================
@@ -162,6 +164,9 @@ export class FfaParticipant {
                                 log.info(`[${this.name}] Обмен очками за дань: ${this.suzerain.name} (-${Math.round(actualPointsTransferred)}) -> ${this.name} (+${Math.round(actualPointsTransferred)}).`);
                                 this.suzerain.powerPoints -= actualPointsTransferred;
                                 this.powerPoints += actualPointsTransferred;
+
+                                this.suzerain.updateStrengthPointsCoefficient();
+                                this.updateStrengthPointsCoefficient();
 
                                 // Отслеживаем обмен для итоговой сводки
                                 this.suzerain.totalPointsFromTribute -= actualPointsTransferred;
@@ -308,6 +313,20 @@ export class FfaParticipant {
     }
 
     /**
+     * Возвращает осветленную версию цвета поселения.
+     * @returns {HordeColor} Осветленный цвет.
+     */
+    public getLightenedColor(): HordeColor {
+        const settlementColor = this.settlement.SettlementColor;
+        return createHordeColor(
+            255,
+            Math.min(255, settlementColor.R + 80),
+            Math.min(255, settlementColor.G + 80),
+            Math.min(255, settlementColor.B + 80)
+        );
+    }
+
+    /**
      * Рассчитывает текущую общую мощь участника.
      * Мощь - это сумма ресурсов и стоимости всех юнитов.
      * @returns {number} Общее значение мощи.
@@ -336,5 +355,27 @@ export class FfaParticipant {
         // enumerator.Dispose();
         
         return power;
+    }
+
+    /**
+     * Обновляет коэффициент очков силы в зависимости от статуса и очков.
+     */
+    public updateStrengthPointsCoefficient(): void {
+        if (!this.settings.enableStrengthPointsCoefficient) {
+            this.strengthPointsCoefficient = 1.0;
+            return;
+        }
+
+        let baseCoefficient = 1.0;
+        if (this.isVassal()) {
+            baseCoefficient = 0.5;
+        } else if (this.isSuzerain()) {
+            baseCoefficient = 1.0;
+        }
+
+        const pointsBonus = 0.15 * this.powerPoints / this.settings.initialPowerPoints;
+        this.strengthPointsCoefficient = baseCoefficient + pointsBonus;
+        
+        //log.info(`[${this.name}] Коэффициент очков силы обновлен: ${this.strengthPointsCoefficient.toFixed(2)} (база: ${baseCoefficient}, бонус за очки: ${pointsBonus.toFixed(2)})`);
     }
 }

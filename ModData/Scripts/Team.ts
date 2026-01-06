@@ -100,6 +100,9 @@ export class Team {
 
         this.updateDiplomacyOnJoin(vassal);
 
+        vassal.updateStrengthPointsCoefficient();
+        this._suzerain.updateStrengthPointsCoefficient();
+
         if (vassal.isDefeated) {
             log.info(`[Команда ${this.id}] Вассал ${vassal.name} побежден, возрождаем замок.`);
             vassal.respawnCastle();
@@ -131,6 +134,7 @@ export class Team {
             log.info(`[Команда ${this.id}] Удаление вассала ${vassal.name} из команды.`);
             this._vassals.delete(vassal.id);
             vassal.suzerain = null; // Сбрасываем сюзерена
+            vassal.updateStrengthPointsCoefficient();
             return true;
         }
         return false;
@@ -254,6 +258,9 @@ export class Team {
                             vassal.powerPoints -= actualPointsTransferred;
                             this._suzerain.powerPoints += actualPointsTransferred;
 
+                            vassal.updateStrengthPointsCoefficient();
+                            this._suzerain.updateStrengthPointsCoefficient();
+
                             // Отслеживаем обмен
                             vassal.totalPointsFromGenerosity -= actualPointsTransferred;
                             this._suzerain.totalPointsFromGenerosity += actualPointsTransferred;
@@ -291,6 +298,7 @@ export class Team {
 
         defeated.powerPoints -= distributedPower;
         defeated.totalPointsLostFromDefeat += distributedPower;
+        defeated.updateStrengthPointsCoefficient();
 
         const members = this.getMembers();
         const totalDamage = members.reduce((sum, member) => sum + Math.max(1, member.damageDealtTo.get(defeated.id) || 0), 0);
@@ -301,6 +309,7 @@ export class Team {
             const gain = distributedPower * damageShare;
             member.powerPoints += gain;
             member.totalPointsFromCaptures += gain;
+            member.updateStrengthPointsCoefficient();
             log.info(`[Команда ${this.id}] -> ${member.name} получает ${Math.round(gain)} очков (доля урона: ${Math.round(damageShare * 100)}%).`);
 
             const msg = createGameMessageWithSound(`За победу над ${defeated.name} вам начислено ${Math.round(gain)} очков силы (ваша доля составляет ${Math.round(damageShare * 100)} %).`, member.settlement.SettlementColor);
@@ -350,6 +359,9 @@ export class Team {
 
         // Обновляем ссылку на сюзерена команды
         this._suzerain = newSuzerain;
+
+        oldSuzerain.updateStrengthPointsCoefficient();
+        newSuzerain.updateStrengthPointsCoefficient();
 
         // Обновляем сюзерена и цель для всех вассалов (включая бывшего сюзерена)
         for (const vassal of this.vassals) {

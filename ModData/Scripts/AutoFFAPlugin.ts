@@ -506,6 +506,10 @@ export class AutoFfaPlugin extends HordePluginBase {
         
         let deltaPoints = damageArgs.Damage * powerPointPerHp * distanceFactor;
 
+        if (this.settings.enableStrengthPointsCoefficient) {
+            deltaPoints *= victim.strengthPointsCoefficient;
+        }
+
         if (this.bountyParticipant && victim.id === this.bountyParticipant.id) {
             deltaPoints *= this.settings.bountyPowerPointsMultiplier;
         }
@@ -517,7 +521,14 @@ export class AutoFfaPlugin extends HordePluginBase {
 
         if (deltaPoints > 0) {
             attacker.powerPoints += deltaPoints;
+            victim.powerPoints -= deltaPoints * 0.1;
             attacker.totalPointsFromAttacks += deltaPoints;
+
+            if (this.settings.enableStrengthPointsCoefficient) {
+                attacker.updateStrengthPointsCoefficient();
+                victim.updateStrengthPointsCoefficient();
+            }
+
             // Урон для распределения трофеев (очков) всегда учитывается
             attacker.damageDealtTo.set(victim.id, (attacker.damageDealtTo.get(victim.id) || 0) + deltaPoints);
 
@@ -1454,6 +1465,9 @@ export class AutoFfaPlugin extends HordePluginBase {
             if (this.bountyParticipant && participant.id === this.bountyParticipant.id) {
                 statusText += " (ГЛАВНАЯ ЦЕЛЬ)";
             }
+            if (this.settings.enableStrengthPointsCoefficient) {
+                statusText += `\n(x ${participant.strengthPointsCoefficient.toFixed(2)})`;
+            }
             
             const x = Math.floor(32 * (participant.castle.Cell.X + 2.7));
             const y = Math.floor(32 * (participant.castle.Cell.Y + 3.6));
@@ -1511,10 +1525,7 @@ export class AutoFfaPlugin extends HordePluginBase {
 
             if (isVisible) {
                 titleDecorator.Text = "Цель:";
-                const ppDecorator = this.powerPointDecorators.get(participant.id);
-                if (ppDecorator) {
-                    titleDecorator.Color = ppDecorator.Color;
-                }
+                titleDecorator.Color = participant.getLightenedColor();
                 titleDecorator.Position = createPoint(x, y);
             } else {
                 if (titleDecorator.Text !== "") titleDecorator.Text = "";
@@ -1534,8 +1545,12 @@ export class AutoFfaPlugin extends HordePluginBase {
                 const isVisible = x >= 0 && y >= 0 && y <= sceneHeightPx;
 
                 if (isVisible) {
-                    memberDecorator.Text = member.name;
-                    memberDecorator.Color = member.settlement.SettlementColor;
+                    let text = member.name;
+                    if (this.settings.enableStrengthPointsCoefficient) {
+                        text = `(x ${member.strengthPointsCoefficient.toFixed(2)}) ${text}`;
+                    }
+                    memberDecorator.Text = text;
+                    memberDecorator.Color = member.getLightenedColor();
                     memberDecorator.Position = createPoint(x, y);
                 } else {
                     if (memberDecorator.Text !== "") memberDecorator.Text = "";
@@ -1614,8 +1629,7 @@ export class AutoFfaPlugin extends HordePluginBase {
     }
 
     private createDecoratorsForParticipant(participant: FfaParticipant): void {
-        const settlementColor = participant.settlement.SettlementColor;
-        const textColor = createHordeColor(255, Math.min(255, settlementColor.R + 128), Math.min(255, settlementColor.G + 128), Math.min(255, settlementColor.B + 128));
+        const textColor = participant.getLightenedColor();
         
         const resourceReward = Math.floor(this.settings.powerPointsRewardPercentage * participant.powerPoints);
         const peopleReward = Math.floor(0.02 * this.settings.powerPointsRewardPercentage * participant.powerPoints);
@@ -1704,13 +1718,12 @@ export class AutoFfaPlugin extends HordePluginBase {
                       `\t4. Вассалы платят дань (ресурсы > ${this.settings.vassalResourceLimit} + 10% от очков силы) своему сюзерену.\n` +
                       `\t5. У вассалов есть лимит населения (${this.settings.vassalPopulationLimit} + 0.2% от очков силы).\n`;
         } else if (gameTickNum === 50 * 50) {
-            message = `\t6. После победы ваша команда получает временный мирный договор на ${this.settings.temporaryPeaceDurationTicks / 50 / 60} мин.\n` +
-                      `\t7. Когда договор истекает, вы снова в состоянии войны со всеми.\n` +
-                      `\t8. Сюзерен проявляет щедрость (делится ресурсами), если его казна превышает ${this.settings.suzerainGenerosityThreshold}.\n`;
+            message = `\t6. После поражения вы получает временный мирный договор с врагами на ${this.settings.temporaryPeaceDurationTicks / 50 / 60} мин.\n` +
+                      `\t7. Сюзерен проявляет щедрость (делится ресурсами), если его казна превышает ${this.settings.suzerainGenerosityThreshold}.\n`;
         } else if (gameTickNum === 50 * 70) {
-            message = `\t9. Самый влиятельный игрок в команде (по очкам силы) становится сюзереном.\n` +
-                      `\t10. После уплаты налогов и зарплат вы получаете ресурсы (${Math.round(this.settings.powerPointsRewardPercentage * 100)}% от очков силы) и людей (${(this.settings.powerPointsRewardPercentage * 0.02 * 100).toFixed(2)}% от очков силы).\n` +
-                      `\t11. Нейтральным юнитам урон не наносится.\n`;
+            message = `\t8. Самый влиятельный игрок в команде (по очкам силы) становится сюзереном.\n` +
+                      `\t9. После уплаты налогов и зарплат вы получаете ресурсы (${Math.round(this.settings.powerPointsRewardPercentage * 100)}% от очков силы) и людей (${(this.settings.powerPointsRewardPercentage * 0.02 * 100).toFixed(2)}% от очков силы).\n` +
+                      `\t10. Нейтральным юнитам урон не наносится.\n`;
         } else if (gameTickNum === 50 * 85) {
             let message = "Включенные механики:\n";
             if (this.settings.isChallengeSystemEnabled) {
